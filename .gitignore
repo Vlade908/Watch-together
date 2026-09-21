@@ -10,18 +10,19 @@ coverage/
 .next/
 out/
 
-# Build Outputs
+# Build Outputs & TypeScript
 dist/
 build/
+*.tsbuildinfo
+**/*.tsbuildinfo
 
 # Environment Variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env*.local
+.env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 
 # Database
 prisma/*.db
@@ -38,14 +39,17 @@ temp/**/*.ts
 # Python & Machine Learning
 .venv/
 venv/
+**/__pycache__/
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
 
-# Scratch & Temporary
+# Scratch, Test scripts & Temporary
 scratch/
 .impeccable/
+test_e2e_*.mjs
+**/*.test-output.*
 
 # Logs
 logs/

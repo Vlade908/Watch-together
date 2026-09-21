@@ -43,6 +43,28 @@ export function TitleCard({ title, isFirstInRow, isLastInRow }: TitleCardProps) 
     }
   };
 
+  // Cancela o timeout pendente de expansão caso ocorra scroll ou desmontagem
+  React.useEffect(() => {
+    const handleScroll = () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true, capture: true });
+    window.addEventListener("wheel", handleScroll, { passive: true });
+
+    return () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      window.removeEventListener("scroll", handleScroll, { capture: true });
+      window.removeEventListener("wheel", handleScroll);
+    };
+  }, []);
+
   return (
     <div
       ref={cardRef}

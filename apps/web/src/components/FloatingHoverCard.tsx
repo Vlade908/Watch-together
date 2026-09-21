@@ -38,6 +38,30 @@ export function FloatingHoverCard() {
     }
   }, [hoveredCard]);
 
+  // Fechamento instantâneo no scroll da página (Auto-dismiss on scroll)
+  useEffect(() => {
+    if (!hoveredCard) return;
+
+    const handleScroll = () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+      setIsVisible(false);
+      setHoveredCard(null);
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true, capture: true });
+    window.addEventListener("wheel", handleScroll, { passive: true });
+    window.addEventListener("resize", handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll, { capture: true });
+      window.removeEventListener("wheel", handleScroll);
+      window.removeEventListener("resize", handleScroll);
+    };
+  }, [hoveredCard, setHoveredCard]);
+
   // Reprodução de vídeo com fallback
   useEffect(() => {
     if (hoveredCard && isVisible && videoRef.current) {
