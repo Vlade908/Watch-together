@@ -52,7 +52,7 @@ flowchart TB
         Next["Next.js 15 App Router<br/>React 19 + Shaka Player + Tailwind"]
     end
 
-    subgraph Gateway["apps/server (Porta 4000 / 54321)"]
+    subgraph Gateway["apps/server (Porta 4000)"]
         Fastify["Fastify Gateway (TypeScript)<br/>Dual-Stack IPv4/IPv6 (::)"]
         WS_Rooms["WS /ws/rooms/:roomId<br/>(Playback Sync & Chat)"]
         WS_Social["WS /ws/social<br/>(Presence & Invites)"]
@@ -86,7 +86,7 @@ flowchart TB
 | Serviço | Diretório | Tecnologia | Porta | Protocolo / Papel Principal |
 |---|---|---|---|---|
 | **Web Client** | [`apps/web`](./apps/web) | Next.js 15, React 19, Tailwind CSS v4, Shaka Player | `3000` | HTTP / Streaming UI, Controles & Sync HUD |
-| **Backend Gateway** | [`apps/server`](./apps/server) | Fastify, WebSockets, Prisma, IORedis | `4000` / `54321` | HTTP & WS (`/ws/rooms/:id`, `/ws/social`) |
+| **Backend Gateway** | [`apps/server`](./apps/server) | Fastify, WebSockets, Prisma, IORedis | `4000` | HTTP & WS (`/ws/rooms/:id`, `/ws/social`) |
 | **ML Engine** | [`watch-together-ml`](./watch-together-ml) | FastAPI, Python 3.11, Scikit-Learn (SVD), Psycopg3 | `8000` | HTTP REST / Treinamento & Inferência de Recomendações |
 | **Database** | [`packages/database`](./packages/database) | PostgreSQL 16 + `pgvector` | `5432` | SQL Relacional & Busca Vetorial em Grafos HNSW |
 | **Cache & Pub/Sub** | Docker | Redis 7 Alpine | `6379` | Armazenamento de Presença & Barramento Pub/Sub |

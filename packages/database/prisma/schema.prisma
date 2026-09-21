@@ -40,6 +40,7 @@ enum RoomMemberRole {
 enum FriendshipStatus {
   PENDING
   ACCEPTED
+  DECLINED
   BLOCKED
 }
 
@@ -48,6 +49,7 @@ model User {
   email         String         @unique
   passwordHash  String
   name          String
+  avatarUrl     String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 

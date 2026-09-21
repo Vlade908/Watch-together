@@ -60,6 +60,69 @@ export interface RoomInvite {
   read?: boolean;
 }
 
+export interface FriendUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl?: string | null;
+}
+
+export interface FriendshipItem {
+  id: string;
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "BLOCKED";
+  createdAt: string;
+  friend?: FriendUser;
+  sender?: FriendUser;
+  receiver?: FriendUser;
+  isSender?: boolean;
+}
+
+export interface FriendNotification {
+  type: "friend_request_received" | "friend_request_accepted" | "friend_removed";
+  friendshipId: string;
+  fromUser: {
+    userId: string;
+    name: string;
+    email: string;
+    avatarUrl?: string | null;
+  };
+  timestamp: number;
+}
+
+export interface PartyMember {
+  userId: string;
+  name: string;
+  avatarUrl?: string | null;
+  role: "HOST" | "MEMBER";
+  joinedAt: number;
+}
+
+export interface PartySession {
+  id: string;
+  hostId: string;
+  hostName: string;
+  members: PartyMember[];
+  activeMedia?: {
+    slug: string;
+    title: string;
+    roomId: string;
+  } | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PartyInvite {
+  partyId: string;
+  hostUser: {
+    userId: string;
+    name: string;
+    avatarUrl?: string | null;
+  };
+  toUserId: string;
+  timestamp: number;
+  read?: boolean;
+}
+
 export type SocialClientMessage =
   | {
       type: "social_identify";
@@ -81,6 +144,33 @@ export type SocialClientMessage =
     }
   | {
       type: "get_social_snapshot";
+    }
+  | {
+      type: "party_create";
+    }
+  | {
+      type: "party_invite";
+      targetUserId: string;
+    }
+  | {
+      type: "party_accept_invite";
+      partyId: string;
+    }
+  | {
+      type: "party_decline_invite";
+      partyId: string;
+    }
+  | {
+      type: "party_leave";
+    }
+  | {
+      type: "party_start_media";
+      slug: string;
+      title: string;
+      roomId: string;
+    }
+  | {
+      type: "party_get_snapshot";
     };
 
 export type SocialServerMessage =
@@ -104,6 +194,35 @@ export type SocialServerMessage =
   | {
       type: "room_invitation";
       invite: RoomInvite;
+    }
+  | {
+      type: "friend_notification";
+      notification: FriendNotification;
+    }
+  | {
+      type: "party_snapshot";
+      party: PartySession | null;
+    }
+  | {
+      type: "party_invitation";
+      invite: PartyInvite;
+    }
+  | {
+      type: "party_updated";
+      party: PartySession;
+    }
+  | {
+      type: "party_disbanded";
+      partyId: string;
+      reason?: string;
+    }
+  | {
+      type: "party_navigate";
+      partyId: string;
+      slug: string;
+      title: string;
+      roomId: string;
+      hostName: string;
     }
   | {
       type: "error";

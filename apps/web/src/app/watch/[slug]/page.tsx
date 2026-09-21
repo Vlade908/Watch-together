@@ -16,25 +16,41 @@ interface WatchPageProps {
 export default function WatchPage({ params }: WatchPageProps) {
   const resolvedParams = use(params);
   const searchParams = useSearchParams();
-  const { updatePresence } = useSocial();
+  const { updatePresence, isPartyHost, currentParty, startPartyMedia } = useSocial();
 
   const isRoomMode = searchParams.get("mode") === "room";
   const roomParam = searchParams.get("room");
   const effectiveRoomId = roomParam || (isRoomMode ? `room-${resolvedParams.slug}` : undefined);
 
   // Formata o nome amigável a partir do slug
-  const titleFormatted = resolvedParams.slug
-    .split("-")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+  const titleFormatted = React.useMemo(() => {
+    return resolvedParams.slug
+      .split("-")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  }, [resolvedParams.slug]);
 
   // Busca metadados do título do catálogo para enriquecer o card de presença
-  const catalogTitle = CATALOG_DATA.find((t) => t.slug === resolvedParams.slug) || {
-    id: resolvedParams.slug,
-    name: titleFormatted,
-    slug: resolvedParams.slug,
-    bannerUrl: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
-  };
+  const catalogTitle = React.useMemo(() => {
+    return (
+      CATALOG_DATA.find((t) => t.slug === resolvedParams.slug) || {
+        id: resolvedParams.slug,
+        name: titleFormatted,
+        slug: resolvedParams.slug,
+        bannerUrl: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
+      }
+    );
+  }, [resolvedParams.slug, titleFormatted]);
+
+  // Sincronização Follow-the-Host: se o usuário for o Host do grupo, emite a navegação para todos os membros
+  useEffect(() => {
+    if (isPartyHost && currentParty) {
+      const room = effectiveRoomId || `sala-${resolvedParams.slug}`;
+      if (currentParty.activeMedia?.slug !== resolvedParams.slug || currentParty.activeMedia?.roomId !== room) {
+        startPartyMedia(resolvedParams.slug, catalogTitle.name, room);
+      }
+    }
+  }, [isPartyHost, currentParty, resolvedParams.slug, effectiveRoomId, catalogTitle.name, startPartyMedia]);
 
   // Publica presença em tempo real na rede Watch Together
   useEffect(() => {
@@ -52,7 +68,7 @@ export default function WatchPage({ params }: WatchPageProps) {
     return () => {
       updatePresence("idle");
     };
-  }, [catalogTitle, effectiveRoomId, updatePresence]);
+  }, [catalogTitle.id, catalogTitle.name, catalogTitle.slug, catalogTitle.bannerUrl, effectiveRoomId, updatePresence]);
 
   return (
     <main className="w-screen h-screen bg-black overflow-hidden relative">

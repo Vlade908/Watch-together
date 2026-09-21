@@ -17,12 +17,21 @@ export function useRecommendations(userId?: string) {
   const fetchRecommendations = useCallback(async () => {
     try {
       setIsLoading(true);
-      let apiBase = process.env.NEXT_PUBLIC_API_URL;
-      if (!apiBase && typeof window !== "undefined") {
-        apiBase = `${window.location.protocol}//${window.location.hostname || "localhost"}:54321`;
-      }
-      if (!apiBase) {
-        apiBase = "http://localhost:54321";
+      let apiBase = "";
+      if (typeof window !== "undefined") {
+        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+        const host = window.location.hostname || "localhost";
+        const envUrl = process.env.NEXT_PUBLIC_API_URL;
+
+        if (envUrl) {
+          apiBase = envUrl
+            .replace("localhost", host)
+            .replace("127.0.0.1", host);
+        } else {
+          apiBase = `${protocol}//${host}:4000`;
+        }
+      } else {
+        apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
       }
 
       const queryUserId = userId || "usuario@watchtogether.com";

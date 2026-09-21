@@ -11,9 +11,21 @@ import { prisma } from "@watch-together/database";
 import { EmbeddingService } from "./services/embeddingService";
 import { RecommendationService } from "./services/recommendationService";
 
+import jwt from "@fastify/jwt";
+import { authRoutes } from "./routes/authRoutes";
+import { friendRoutes } from "./routes/friendRoutes";
+
+import { PartyService } from "./services/partyService";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    authenticate: (req: any, reply: any) => Promise<void>;
+  }
+}
+
 dotenv.config();
 
-const PORT = parseInt(process.env.PORT || "54321", 10);
+const PORT = parseInt(process.env.PORT || "4000", 10);
 const HOST = process.env.HOST || "::";
 
 const fastify = Fastify({
@@ -23,13 +35,12 @@ const fastify = Fastify({
 });
 
 async function main() {
-  // 1. Plugins de CORS e WebSockets
-  // Garante que requisições HTTP e Upgrade headers (Origin: http://localhost:3000) sejam permitidos sem restrições
+  // 1. Plugins de CORS, WebSockets e JWT
   await fastify.register(cors, {
     origin: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
-    allowedHeaders: ["*"],
+    allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   });
 
   await fastify.register(websocket, {
@@ -39,9 +50,22 @@ async function main() {
     },
   });
 
-  // 2. Inicializa o barramento de eventos Redis Pub/Sub e Presença Social
+  await fastify.register(jwt, {
+    secret: process.env.JWT_SECRET || "super-secret-watch-together-key-change-in-production",
+  });
+
+  fastify.decorate("authenticate", async function (req: any, reply: any) {
+    try {
+      await req.jwtVerify();
+    } catch (err) {
+      reply.status(401).send({ error: "Token de autenticação inválido ou ausente." });
+    }
+  });
+
+  // 2. Inicializa o barramento de eventos Redis Pub/Sub, Presença Social e Party Lobby
   PubSubService.init();
   PresenceService.init();
+  PartyService.init();
 
   // 3. Inicializa e indexa embeddings com pgvector se necessário
   try {
@@ -102,7 +126,11 @@ async function main() {
     return { titles };
   });
 
-  // 6. Rotas WebSocket com captura dinâmica e suporte a subprotocolos
+  // 6. Rotas de Autenticação e Gestão de Amizades
+  await fastify.register(authRoutes, { prefix: "/api/auth" });
+  await fastify.register(friendRoutes, { prefix: "/api/friends" });
+
+  // 7. Rotas WebSocket com captura dinâmica e suporte a subprotocolos
   fastify.register(async function (fastifyInstance) {
     // Sala de Reprodução Síncrona (captura qualquer slug dinâmico, ex: sala-interestelar-alem-do-horizonte-6l33)
     fastifyInstance.get(

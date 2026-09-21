@@ -96,6 +96,12 @@ export function VideoPlayer({
     async function initShaka() {
       if (!videoRef.current) return;
 
+      if (!manifestUrl || typeof manifestUrl !== "string" || !manifestUrl.trim()) {
+        console.warn("[VideoPlayer] Stream manifestUrl indefinida ou vazia, aguardando dados...");
+        setIsLoading(true);
+        return;
+      }
+
       try {
         const shakaModule: any = await import("shaka-player/dist/shaka-player.compiled.js");
         const shaka = shakaModule.default || shakaModule;
@@ -106,7 +112,14 @@ export function VideoPlayer({
           return;
         }
 
-        const player = new shaka.Player(videoRef.current);
+        // Destrói instância anterior caso exista
+        if (shakaPlayerRef.current) {
+          await shakaPlayerRef.current.destroy().catch(() => {});
+          shakaPlayerRef.current = null;
+        }
+
+        const player = new shaka.Player();
+        await player.attach(videoRef.current);
         shakaPlayerRef.current = player;
 
         // Configuração de ABR e resiliência de buffer
@@ -251,6 +264,15 @@ export function VideoPlayer({
       if (isPlaying) setShowControls(false);
     }, 2800);
   }, [isPlaying]);
+
+  // Notifica componentes acoplados (como HUD de Party) sobre visibilidade dos controles
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("watch-controls-visible", { detail: { visible: showControls } })
+      );
+    }
+  }, [showControls]);
 
   const togglePlay = () => {
     const video = videoRef.current;

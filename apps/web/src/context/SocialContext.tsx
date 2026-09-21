@@ -2,8 +2,21 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { UserPresence, RoomSummary, RoomInvite, SocialServerMessage, SocialClientMessage, ActiveRoom } from "@/types/social";
+import {
+  UserPresence,
+  RoomSummary,
+  RoomInvite,
+  SocialServerMessage,
+  SocialClientMessage,
+  ActiveRoom,
+  FriendshipItem,
+  FriendUser,
+  FriendNotification,
+  PartySession,
+  PartyInvite,
+} from "@/types/social";
 import { CATALOG_DATA, CatalogTitle } from "@/data/mockCatalog";
+import { useAuth, getApiBaseUrl } from "./AuthContext";
 
 interface SocialContextType {
   currentUser: UserPresence;
@@ -13,17 +26,44 @@ interface SocialContextType {
   unreadInvitesCount: number;
   latestInviteToast: RoomInvite | null;
   isConnected: boolean;
+  friends: FriendshipItem[];
+  pendingRequests: FriendshipItem[];
+  unreadRequestsCount: number;
+  latestFriendToast: FriendNotification | null;
+  // Watch Party Lobby
+  currentParty: PartySession | null;
+  isPartyHost: boolean;
+  partyInvitations: PartyInvite[];
+  latestPartyInviteToast: PartyInvite | null;
   sendInvite: (toUserId: string, roomId: string, movieSlug: string, movieTitle: string, bannerUrl?: string) => void;
   acceptInvite: (invite: RoomInvite) => void;
   dismissInvite: (inviteId: string) => void;
   markAllInvitesAsRead: () => void;
   dismissToast: () => void;
-  updatePresence: (status: "watching" | "idle" | "in_lobby", watchingTitle?: { id: string; name: string; slug: string; bannerUrl: string }, roomId?: string) => void;
+  dismissFriendToast: () => void;
+  dismissPartyToast: () => void;
+  updatePresence: (
+    status: "watching" | "idle" | "in_lobby",
+    watchingTitle?: { id: string; name: string; slug: string; bannerUrl: string },
+    roomId?: string
+  ) => void;
+  sendFriendRequest: (targetUserId: string) => Promise<{ success: boolean; message?: string }>;
+  acceptFriendRequest: (friendshipId: string) => Promise<{ success: boolean; message?: string }>;
+  declineFriendRequest: (friendshipId: string) => Promise<{ success: boolean; message?: string }>;
+  searchUsers: (query: string) => Promise<FriendUser[]>;
+  fetchFriends: () => Promise<void>;
+  // Party Actions
+  createParty: () => void;
+  inviteToParty: (targetUserId: string) => void;
+  acceptPartyInvite: (invite: PartyInvite) => void;
+  declinePartyInvite: (partyId: string) => void;
+  leaveParty: () => void;
+  startPartyMedia: (slug: string, title: string, roomId: string) => void;
 }
 
 const SocialContext = createContext<SocialContextType | undefined>(undefined);
 
-// Amigos simulados de fallback para enriquecer a experiência quando estiver em ambiente monousuário
+// Amigos simulados de fallback para enriquecer a experiência visual
 const FALLBACK_MOCK_FRIENDS: UserPresence[] = [
   {
     userId: "f1-lucas",
@@ -58,20 +98,20 @@ const FALLBACK_MOCK_FRIENDS: UserPresence[] = [
     lastSeen: Date.now(),
   },
   {
-    userId: "f3-thiago",
-    userName: "Thiago Silva",
+    userId: "f3-rodrigo",
+    userName: "Rodrigo Silva",
     avatarColor: "bg-emerald-600",
-    initials: "TS",
+    initials: "RS",
     status: "idle",
     device: "Mobile",
-    lastSeen: Date.now(),
+    lastSeen: Date.now() - 3 * 60 * 1000,
   },
 ];
 
-// Salas públicas simuladas de fallback
+// Salas mock para catálogo
 const FALLBACK_MOCK_ROOMS: ActiveRoom[] = [
   {
-    code: "cinephiles-4k",
+    code: "sala-cinephiles-4k",
     title: CATALOG_DATA[0],
     hostName: "Lucas Alencar",
     participantsCount: 4,
@@ -80,73 +120,70 @@ const FALLBACK_MOCK_ROOMS: ActiveRoom[] = [
     isPrivate: false,
   },
   {
-    code: "sci-fi-weekend",
-    title: CATALOG_DATA[1],
-    hostName: "Beatriz Ramos",
+    code: "sala-cyber-odyssey",
+    title: CATALOG_DATA[2],
+    hostName: "Mariana Costa",
     participantsCount: 2,
-    maxParticipants: 8,
-    syncQuality: "Full HD (HLS Adaptive)",
+    maxParticipants: 6,
+    syncQuality: "Full HD (Sub-100ms sync)",
     isPrivate: false,
   },
 ];
 
-export function SocialProvider({ children }: { children: React.ReactNode }) {
+export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
+  const { user: authUser, token, isLoading: isAuthLoading } = useAuth();
 
-  // 1. Identidade estável do usuário
+  // Presença do usuário autenticado
   const [currentUser, setCurrentUser] = useState<UserPresence>(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("wt_current_user");
-      if (stored) {
-        try {
-          return JSON.parse(stored);
-        } catch {}
-      }
-      const newUser: UserPresence = {
-        userId: `user-${Math.random().toString(36).substring(2, 7)}`,
-        userName: "Vlad Principal",
-        avatarColor: "bg-[#e50914]",
-        initials: "VP",
-        status: "idle",
-        device: "Web Desktop",
-        lastSeen: Date.now(),
-      };
-      localStorage.setItem("wt_current_user", JSON.stringify(newUser));
-      return newUser;
-    }
     return {
-      userId: "user-default",
-      userName: "Vlad Principal",
+      userId: authUser ? authUser.id : "",
+      userName: authUser ? authUser.name : "Você",
       avatarColor: "bg-[#e50914]",
-      initials: "VP",
+      initials: authUser ? authUser.name.substring(0, 2).toUpperCase() : "VC",
       status: "idle",
       device: "Web Desktop",
       lastSeen: Date.now(),
     };
   });
 
+  const currentUserRef = useRef<UserPresence>(currentUser);
+  currentUserRef.current = currentUser;
+
+  // Atualiza identidade quando o usuário logar ou atualizar perfil
+  useEffect(() => {
+    if (authUser) {
+      const updated: UserPresence = {
+        userId: authUser.id,
+        userName: authUser.name,
+        avatarColor: "bg-[#e50914]",
+        initials: authUser.name.substring(0, 2).toUpperCase(),
+        status: currentUserRef.current.status || "idle",
+        watchingTitle: currentUserRef.current.watchingTitle,
+        roomId: currentUserRef.current.roomId,
+        device: "Web Desktop",
+        lastSeen: Date.now(),
+      };
+      setCurrentUser(updated);
+      currentUserRef.current = updated;
+    }
+  }, [authUser]);
+
   const [realOnlineUsers, setRealOnlineUsers] = useState<UserPresence[]>([]);
   const [realActiveRooms, setRealActiveRooms] = useState<RoomSummary[]>([]);
-  const [invitations, setInvitations] = useState<RoomInvite[]>([
-    {
-      inviteId: "mock-invite-1",
-      fromUser: {
-        userId: "f1-lucas",
-        userName: "Lucas Alencar",
-        avatarColor: "bg-blue-600",
-        initials: "LA",
-      },
-      toUserId: currentUser.userId,
-      roomId: "sala-cinephiles-4k",
-      movieSlug: CATALOG_DATA[0].slug,
-      movieTitle: CATALOG_DATA[0].name,
-      bannerUrl: CATALOG_DATA[0].bannerUrl,
-      timestamp: Date.now() - 5 * 60 * 1000,
-      read: false,
-    },
-  ]);
+  const [invitations, setInvitations] = useState<RoomInvite[]>([]);
   const [latestInviteToast, setLatestInviteToast] = useState<RoomInvite | null>(null);
+  const [latestFriendToast, setLatestFriendToast] = useState<FriendNotification | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+
+  // Watch Party Lobby State
+  const [currentParty, setCurrentParty] = useState<PartySession | null>(null);
+  const [partyInvitations, setPartyInvitations] = useState<PartyInvite[]>([]);
+  const [latestPartyInviteToast, setLatestPartyInviteToast] = useState<PartyInvite | null>(null);
+
+  // Amizades
+  const [friends, setFriends] = useState<FriendshipItem[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<FriendshipItem[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -158,27 +195,93 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Resolução dinâmica de URL para conexões em dev/local/LAN na porta 54321
-  const resolveSocialWsUrl = useCallback(() => {
-    let base = process.env.NEXT_PUBLIC_WS_URL;
-    if (!base && typeof window !== "undefined") {
+  // Resolução dinâmica de URL para conexões em dev/local/LAN
+  const resolveSocialWsUrl = useCallback((authToken: string) => {
+    let base = "";
+    if (typeof window !== "undefined") {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.hostname || "localhost";
-      base = `${protocol}//${host}:54321`;
-    }
-    if (!base) {
-      base = "ws://localhost:54321";
-    }
-    return `${base}/ws/social?userId=${encodeURIComponent(currentUser.userId)}&userName=${encodeURIComponent(currentUser.userName)}`;
-  }, [currentUser.userId, currentUser.userName]);
+      const envUrl = process.env.NEXT_PUBLIC_WS_URL;
 
-  // Ciclo de Vida da Conexão Social
+      if (envUrl) {
+        base = envUrl
+          .replace(/^http:/, "ws:")
+          .replace(/^https:/, "wss:")
+          .replace("localhost", host)
+          .replace("127.0.0.1", host);
+      } else {
+        base = `${protocol}//${host}:4000`;
+      }
+    } else {
+      base = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
+    }
+
+    return `${base}/ws/social?token=${encodeURIComponent(authToken)}`;
+  }, []);
+
+  // Busca lista de amizades e solicitações
+  const fetchFriends = useCallback(async () => {
+    if (!token) {
+      setFriends([]);
+      setPendingRequests([]);
+      return;
+    }
+    try {
+      const apiBase = getApiBaseUrl();
+      const res = await fetch(`${apiBase}/api/friends`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const mappedRequests: FriendshipItem[] = [
+          ...(data.receivedRequests || []).map((r: any) => ({
+            id: r.friendshipId,
+            status: "PENDING" as const,
+            createdAt: r.createdAt,
+            sender: r.from,
+            isSender: false,
+          })),
+          ...(data.sentRequests || []).map((r: any) => ({
+            id: r.friendshipId,
+            status: "PENDING" as const,
+            createdAt: r.createdAt,
+            receiver: r.to,
+            isSender: true,
+          })),
+        ];
+        setFriends(data.friends || []);
+        setPendingRequests(mappedRequests);
+      }
+    } catch (err) {
+      console.error("[Social] Erro ao carregar amizades:", err);
+    }
+  }, [token]);
+
+  const fetchFriendsRef = useRef(fetchFriends);
+  fetchFriendsRef.current = fetchFriends;
+
   useEffect(() => {
+    if (token) {
+      fetchFriends();
+    }
+  }, [token, fetchFriends]);
+
+  // Ciclo de Vida da Conexão Social: Conecta SOMENTE quando autenticado e pronto
+  useEffect(() => {
+    if (isAuthLoading || !token) {
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+      setIsConnected(false);
+      return;
+    }
+
     let isUnmounted = false;
 
     function connect() {
-      if (isUnmounted) return;
-      const wsUrl = resolveSocialWsUrl();
+      if (isUnmounted || !token) return;
+      const wsUrl = resolveSocialWsUrl(token);
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -193,7 +296,7 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
           ws.send(
             JSON.stringify({
               type: "social_identify",
-              user: currentUser,
+              user: currentUserRef.current,
             })
           );
         };
@@ -202,17 +305,17 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
           if (isUnmounted) return;
           try {
             const data = JSON.parse(event.data) as SocialServerMessage;
+            const currentUserId = currentUserRef.current.userId;
 
             switch (data.type) {
               case "social_snapshot": {
-                // Filtra o próprio usuário da lista de amigos online
-                setRealOnlineUsers(data.onlineUsers.filter((u) => u.userId !== currentUser.userId));
+                setRealOnlineUsers(data.onlineUsers.filter((u) => u.userId !== currentUserId));
                 setRealActiveRooms(data.activeRooms);
                 break;
               }
 
               case "user_presence_changed": {
-                if (data.user.userId === currentUser.userId) return;
+                if (data.user.userId === currentUserId) return;
                 setRealOnlineUsers((prev) => {
                   const exists = prev.some((u) => u.userId === data.user.userId);
                   if (exists) {
@@ -239,6 +342,41 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
                 setLatestInviteToast(inviteWithRead);
                 break;
               }
+
+              case "friend_notification": {
+                setLatestFriendToast(data.notification);
+                fetchFriendsRef.current();
+                break;
+              }
+
+              // ================= WATCH PARTY EVENTS =================
+              case "party_snapshot": {
+                setCurrentParty(data.party);
+                break;
+              }
+
+              case "party_invitation": {
+                const inviteWithRead = { ...data.invite, read: false };
+                setPartyInvitations((prev) => [inviteWithRead, ...prev]);
+                setLatestPartyInviteToast(inviteWithRead);
+                break;
+              }
+
+              case "party_updated": {
+                setCurrentParty(data.party);
+                break;
+              }
+
+              case "party_disbanded": {
+                setCurrentParty(null);
+                break;
+              }
+
+              case "party_navigate": {
+                console.log(`[Watch Party] Sincronização de navegação do Host ${data.hostName} -> /watch/${data.slug}?mode=room&room=${data.roomId}`);
+                router.push(`/watch/${data.slug}?mode=room&room=${data.roomId}`);
+                break;
+              }
             }
           } catch (err) {
             console.error("[Social WS Message Parse Error]:", err);
@@ -259,6 +397,7 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
         };
       } catch (err) {
         if (!isUnmounted) {
+          setIsConnected(false);
           reconnectTimeoutRef.current = setTimeout(connect, 3000);
         }
       }
@@ -270,53 +409,112 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
       isUnmounted = true;
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (socketRef.current) {
-        const sock = socketRef.current;
-        sock.onopen = null;
-        sock.onmessage = null;
-        sock.onerror = null;
-        sock.onclose = null;
-        if (sock.readyState === WebSocket.OPEN || sock.readyState === WebSocket.CONNECTING) {
-          try {
-            sock.close();
-          } catch {}
-        }
+        socketRef.current.close();
         socketRef.current = null;
       }
     };
-  }, [currentUser, resolveSocialWsUrl]);
+  }, [token, isAuthLoading, resolveSocialWsUrl, router]);
 
-  // Atualização explícita de presença (ao assistir filme ou mudar de página)
-  const updatePresence = useCallback(
-    (
-      status: "watching" | "idle" | "in_lobby",
-      watchingTitle?: { id: string; name: string; slug: string; bannerUrl: string },
-      roomId?: string
-    ) => {
-      setCurrentUser((prev) => {
-        const updated = {
-          ...prev,
-          status,
-          watchingTitle,
-          roomId,
-          lastSeen: Date.now(),
-        };
-        if (typeof window !== "undefined") {
-          localStorage.setItem("wt_current_user", JSON.stringify(updated));
+  // Ações de Amizade
+  const sendFriendRequest = useCallback(
+    async (targetUserId: string) => {
+      if (!token) return { success: false, message: "Você precisa estar logado para adicionar amigos." };
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/friends/request`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ targetUserId }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          fetchFriends();
+          return { success: true, message: data.message };
         }
-        return updated;
-      });
-
-      send({
-        type: "social_update_presence",
-        status,
-        watchingTitle,
-        roomId,
-      });
+        return { success: false, message: data.message || "Erro ao solicitar amizade." };
+      } catch {
+        return { success: false, message: "Falha de comunicação com o servidor." };
+      }
     },
-    [send]
+    [token, fetchFriends]
   );
 
-  // Disparo de Convite para Sala
+  const acceptFriendRequest = useCallback(
+    async (friendshipId: string) => {
+      if (!token) return { success: false, message: "Você precisa estar logado." };
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/friends/accept`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ friendshipId }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          fetchFriends();
+          return { success: true, message: data.message };
+        }
+        return { success: false, message: data.message || "Erro ao aceitar solicitação." };
+      } catch {
+        return { success: false, message: "Falha de comunicação com o servidor." };
+      }
+    },
+    [token, fetchFriends]
+  );
+
+  const declineFriendRequest = useCallback(
+    async (friendshipId: string) => {
+      if (!token) return { success: false, message: "Você precisa estar logado." };
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/friends/decline`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ friendshipId }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          fetchFriends();
+          return { success: true, message: data.message };
+        }
+        return { success: false, message: data.message || "Erro ao recusar solicitação." };
+      } catch {
+        return { success: false, message: "Falha de comunicação com o servidor." };
+      }
+    },
+    [token, fetchFriends]
+  );
+
+  const searchUsers = useCallback(
+    async (query: string): Promise<FriendUser[]> => {
+      if (!token || !query.trim()) return [];
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/friends/search?q=${encodeURIComponent(query)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.users || [];
+        }
+        return [];
+      } catch {
+        return [];
+      }
+    },
+    [token]
+  );
+
+  // Enviar convite direto de sala
   const sendInvite = useCallback(
     (toUserId: string, roomId: string, movieSlug: string, movieTitle: string, bannerUrl?: string) => {
       send({
@@ -331,116 +529,179 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
     [send]
   );
 
-  // Aceitar convite e navegar diretamente para a sala
   const acceptInvite = useCallback(
     (invite: RoomInvite) => {
-      setInvitations((prev) =>
-        prev.map((inv) => (inv.inviteId === invite.inviteId ? { ...inv, read: true } : inv))
-      );
+      setInvitations((prev) => prev.map((i) => (i.inviteId === invite.inviteId ? { ...i, read: true } : i)));
       setLatestInviteToast(null);
-      router.push(`/watch/${invite.movieSlug}?mode=room&room=${encodeURIComponent(invite.roomId)}`);
+      router.push(`/watch/${invite.movieSlug}?mode=room&room=${invite.roomId}`);
     },
     [router]
   );
 
-  // Dispensar convite
   const dismissInvite = useCallback((inviteId: string) => {
-    setInvitations((prev) => prev.filter((inv) => inv.inviteId !== inviteId));
+    setInvitations((prev) => prev.filter((i) => i.inviteId !== inviteId));
   }, []);
 
   const markAllInvitesAsRead = useCallback(() => {
-    setInvitations((prev) => prev.map((inv) => ({ ...inv, read: true })));
+    setInvitations((prev) => prev.map((i) => ({ ...i, read: true })));
   }, []);
 
   const dismissToast = useCallback(() => {
     setLatestInviteToast(null);
   }, []);
 
-  // Mescla usuários reais com os amigos de mock quando houver poucos membros
-  const mergedOnlineUsers = React.useMemo(() => {
-    const realMap = new Map(realOnlineUsers.map((u) => [u.userId, u]));
-    const list = [...realOnlineUsers];
+  const dismissFriendToast = useCallback(() => {
+    setLatestFriendToast(null);
+  }, []);
 
-    for (const mock of FALLBACK_MOCK_FRIENDS) {
-      if (!realMap.has(mock.userId)) {
-        list.push(mock);
-      }
-    }
-    return list;
-  }, [realOnlineUsers]);
+  const dismissPartyToast = useCallback(() => {
+    setLatestPartyInviteToast(null);
+  }, []);
 
-  // Mescla salas ativas do Redis com salas públicas de demonstração
-  const mergedActiveRooms = React.useMemo(() => {
-    const realMapped: ActiveRoom[] = realActiveRooms.map((summary) => {
-      const catalogFound = CATALOG_DATA.find((t) => t.slug === summary.slug || t.id === summary.mediaId);
-      const title: CatalogTitle = catalogFound || {
-        id: summary.mediaId,
-        slug: summary.slug,
-        name: summary.titleName,
-        type: "MOVIE",
-        genres: ["Ficção Científica"],
-        bannerUrl: summary.bannerUrl,
-        matchPercentage: 98,
-        ageRating: "12",
-        releaseYear: 2024,
-        synopsis: "Sessão síncrona iniciada pela comunidade no Watch Together.",
-        cast: ["Comunidade Watch Together"],
-        director: "Watch Together Host",
-        moods: ["Empolgante", "Social"],
-      };
+  // ================= AÇÕES DA WATCH PARTY LOBBY =================
+  const createParty = useCallback(() => {
+    send({ type: "party_create" });
+  }, [send]);
 
-      return {
-        code: summary.roomId,
-        title,
-        hostName: summary.hostName,
-        participantsCount: summary.participantsCount,
-        maxParticipants: summary.maxParticipants,
-        syncQuality: summary.syncQuality || "Ultra HD (Sub-50ms sync)",
-        isPrivate: summary.isPrivate,
-      };
-    });
+  const inviteToParty = useCallback(
+    (targetUserId: string) => {
+      send({ type: "party_invite", targetUserId });
+    },
+    [send]
+  );
 
-    const existingCodes = new Set(realMapped.map((r) => r.code));
-    const list = [...realMapped];
+  const acceptPartyInvite = useCallback(
+    (invite: PartyInvite) => {
+      setPartyInvitations((prev) => prev.filter((i) => i.partyId !== invite.partyId));
+      setLatestPartyInviteToast(null);
+      send({ type: "party_accept_invite", partyId: invite.partyId });
+    },
+    [send]
+  );
 
-    for (const mock of FALLBACK_MOCK_ROOMS) {
-      if (!existingCodes.has(mock.code)) {
-        list.push(mock);
-      }
-    }
+  const declinePartyInvite = useCallback(
+    (partyId: string) => {
+      setPartyInvitations((prev) => prev.filter((i) => i.partyId !== partyId));
+      setLatestPartyInviteToast(null);
+      send({ type: "party_decline_invite", partyId });
+    },
+    [send]
+  );
 
-    return list;
-  }, [realActiveRooms]);
+  const leaveParty = useCallback(() => {
+    send({ type: "party_leave" });
+    setCurrentParty(null);
+  }, [send]);
 
-  const unreadInvitesCount = invitations.filter((inv) => !inv.read).length;
+  const startPartyMedia = useCallback(
+    (slug: string, title: string, roomId: string) => {
+      send({ type: "party_start_media", slug, title, roomId });
+    },
+    [send]
+  );
+
+  // Atualizar estado de presença do usuário
+  const updatePresence = useCallback(
+    (
+      status: "watching" | "idle" | "in_lobby",
+      watchingTitle?: { id: string; name: string; slug: string; bannerUrl: string },
+      roomId?: string
+    ) => {
+      setCurrentUser((prev) => {
+        const updated: UserPresence = {
+          ...prev,
+          status,
+          watchingTitle,
+          roomId,
+          lastSeen: Date.now(),
+        };
+        currentUserRef.current = updated;
+        return updated;
+      });
+
+      send({
+        type: "social_update_presence",
+        status,
+        watchingTitle,
+        roomId,
+      });
+    },
+    [send]
+  );
+
+  // Amigos online: combina usuários reais com fallback
+  const onlineUsers = realOnlineUsers.length > 0 ? realOnlineUsers : FALLBACK_MOCK_FRIENDS;
+
+  // Salas ativas: combina salas reais mapeadas para o catálogo com fallback
+  const activeRooms: ActiveRoom[] =
+    realActiveRooms.length > 0
+      ? realActiveRooms.map((room) => {
+          const catalogItem = CATALOG_DATA.find((m) => m.slug === room.slug) || CATALOG_DATA[0];
+          return {
+            code: room.roomId,
+            title: catalogItem,
+            hostName: room.hostName,
+            participantsCount: room.participantsCount,
+            maxParticipants: room.maxParticipants,
+            syncQuality: room.syncQuality || "Full HD (Sub-100ms sync)",
+            isPrivate: room.isPrivate,
+          };
+        })
+      : FALLBACK_MOCK_ROOMS;
+
+  const unreadInvitesCount = invitations.filter((i) => !i.read).length;
+  const unreadRequestsCount = pendingRequests.filter((r) => !r.isSender).length;
+  const isPartyHost = currentParty?.hostId === currentUser.userId;
 
   return (
     <SocialContext.Provider
       value={{
         currentUser,
-        onlineUsers: mergedOnlineUsers,
-        activeRooms: mergedActiveRooms,
+        onlineUsers,
+        activeRooms,
         invitations,
         unreadInvitesCount,
         latestInviteToast,
+        latestFriendToast,
         isConnected,
+        friends,
+        pendingRequests,
+        unreadRequestsCount,
+        // Party
+        currentParty,
+        isPartyHost,
+        partyInvitations,
+        latestPartyInviteToast,
         sendInvite,
         acceptInvite,
         dismissInvite,
         markAllInvitesAsRead,
         dismissToast,
+        dismissFriendToast,
+        dismissPartyToast,
         updatePresence,
+        sendFriendRequest,
+        acceptFriendRequest,
+        declineFriendRequest,
+        searchUsers,
+        fetchFriends,
+        createParty,
+        inviteToParty,
+        acceptPartyInvite,
+        declinePartyInvite,
+        leaveParty,
+        startPartyMedia,
       }}
     >
       {children}
     </SocialContext.Provider>
   );
-}
+};
 
-export function useSocial() {
+export const useSocial = () => {
   const context = useContext(SocialContext);
   if (!context) {
-    throw new Error("useSocial deve ser usado dentro de um SocialProvider");
+    throw new Error("useSocial deve ser utilizado dentro de um SocialProvider");
   }
   return context;
-}
+};

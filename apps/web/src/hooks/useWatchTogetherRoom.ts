@@ -48,22 +48,31 @@ export function useWatchTogetherRoom({
     }
   }, []);
 
-  // Determina a URL do WebSocket com fallback dinâmico robusto na porta 54321
+  // Determina a URL do WebSocket com resolução dinâmica para rede local (LAN)
   const resolveWsUrl = useCallback((room: string, attempt = 0) => {
-    let base = process.env.NEXT_PUBLIC_WS_URL;
-    if (!base && typeof window !== "undefined") {
+    let base = "";
+    if (typeof window !== "undefined") {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      let host = window.location.hostname || "localhost";
-      // Em caso de falha de DNS local de IPv6, alterna entre localhost e 127.0.0.1 nas tentativas
-      if (attempt % 2 === 1 && (host === "localhost" || host === "127.0.0.1")) {
-        host = host === "localhost" ? "127.0.0.1" : "localhost";
+      const host = window.location.hostname || "localhost";
+      const envUrl = process.env.NEXT_PUBLIC_WS_URL;
+
+      if (envUrl) {
+        base = envUrl
+          .replace(/^http:/, "ws:")
+          .replace(/^https:/, "wss:")
+          .replace("localhost", host)
+          .replace("127.0.0.1", host);
+      } else {
+        base = `${protocol}//${host}:4000`;
       }
-      base = `${protocol}//${host}:54321`;
+    } else {
+      base = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
     }
-    if (!base) {
-      base = attempt % 2 === 1 ? "ws://127.0.0.1:54321" : "ws://localhost:54321";
-    }
-    return `${base}/ws/rooms/${encodeURIComponent(room)}`;
+
+    const storedToken = typeof window !== "undefined" ? localStorage.getItem("watch_together_token") : null;
+    const tokenQuery = storedToken ? `?token=${encodeURIComponent(storedToken)}` : "";
+
+    return `${base}/ws/rooms/${encodeURIComponent(room)}${tokenQuery}`;
   }, []);
 
   // 1. Ciclo de Conexão WebSocket
@@ -123,13 +132,18 @@ export function useWatchTogetherRoom({
                 setMembers(message.members);
 
                 // Alinha o vídeo local com o estado inicial
+                const authoritativeTime =
+                  clockSyncRef.current.calculateAuthoritativeMediaTime(message.state) ||
+                  message.currentMediaTime;
+
                 if (videoRef.current) {
+                  const video = videoRef.current;
                   isLocalActionRef.current = true;
-                  videoRef.current.currentTime = message.currentMediaTime;
+                  video.currentTime = authoritativeTime;
                   if (message.state.status === "PLAYING") {
-                    videoRef.current.play().catch(() => {});
+                    video.play().catch(() => {});
                   } else {
-                    videoRef.current.pause();
+                    video.pause();
                   }
                   setTimeout(() => {
                     isLocalActionRef.current = false;
@@ -258,6 +272,40 @@ export function useWatchTogetherRoom({
       }
     };
   }, [roomId, stableUserId, stableUserName, enabled, resolveWsUrl, videoRef]);
+
+  // 1.1 Sincronização e alinhamento autoritativo quando o player de vídeo estiver pronto
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !roomState || !enabled || !isConnected) return;
+
+    const syncInitialVideoState = () => {
+      if (isLocalActionRef.current) return;
+      const authoritativeTime = clockSyncRef.current.calculateAuthoritativeMediaTime(roomState);
+      if (Math.abs(video.currentTime - authoritativeTime) > 0.3) {
+        isLocalActionRef.current = true;
+        video.currentTime = authoritativeTime;
+        setTimeout(() => {
+          isLocalActionRef.current = false;
+        }, 300);
+      }
+      if (roomState.status === "PLAYING" && video.paused) {
+        video.play().catch(() => {});
+      } else if (roomState.status === "PAUSED" && !video.paused) {
+        video.pause();
+      }
+    };
+
+    if (video.readyState >= 1) {
+      syncInitialVideoState();
+    } else {
+      video.addEventListener("loadedmetadata", syncInitialVideoState, { once: true });
+      video.addEventListener("canplay", syncInitialVideoState, { once: true });
+      return () => {
+        video.removeEventListener("loadedmetadata", syncInitialVideoState);
+        video.removeEventListener("canplay", syncInitialVideoState);
+      };
+    }
+  }, [roomState, isConnected, enabled, videoRef]);
 
   // 2. Loop do Controlador de Drift em 3 Zonas (Executado a cada 500ms)
   useEffect(() => {

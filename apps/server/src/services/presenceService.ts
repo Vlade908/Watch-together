@@ -2,14 +2,14 @@ import { redisClient, redisPublisher, redisSubscriber } from "../redis/client";
 import { UserPresence, RoomSummary, RoomInvite, SocialServerMessage } from "../types";
 
 type SocialBroadcastCallback = (message: SocialServerMessage) => void;
-type UserInviteCallback = (invite: RoomInvite) => void;
+type UserNotificationCallback = (message: SocialServerMessage) => void;
 
 export class PresenceService {
   private static USERS_KEY = "users:online";
   private static ROOMS_KEY = "rooms:active:summaries";
 
   private static globalSubscribers: Set<SocialBroadcastCallback> = new Set();
-  private static userNotificationSubscribers: Map<string, Set<UserInviteCallback>> = new Map();
+  private static userNotificationSubscribers: Map<string, Set<UserNotificationCallback>> = new Map();
   private static isSubscribed = false;
 
   public static init() {
@@ -40,15 +40,31 @@ export class PresenceService {
           // Exemplo: user:user-vlad:notifications
           const parts = channel.split(":");
           const userId = parts[1];
-          const invite = JSON.parse(messageStr) as RoomInvite;
+          const raw = JSON.parse(messageStr);
+          
+          let message: SocialServerMessage;
+          if (raw.kind === "party_invite") {
+            message = { type: "party_invitation", invite: raw.data };
+          } else if (raw.kind === "friend_event") {
+            message = { type: "friend_notification", notification: raw.data };
+          } else if (raw.kind === "room_invite") {
+            message = { type: "room_invitation", invite: raw.data };
+          } else if (raw.type) {
+            message = raw;
+          } else {
+            message = {
+              type: "room_invitation",
+              invite: raw as RoomInvite,
+            };
+          }
 
           const userCallbacks = this.userNotificationSubscribers.get(userId);
           if (userCallbacks) {
             for (const cb of userCallbacks) {
               try {
-                cb(invite);
+                cb(message);
               } catch (err) {
-                console.error("[PresenceService] Erro no callback de convite:", err);
+                console.error("[PresenceService] Erro no callback de notificação:", err);
               }
             }
           }
@@ -163,7 +179,23 @@ export class PresenceService {
    */
   public static async sendInvite(invite: RoomInvite): Promise<void> {
     const channel = `user:${invite.toUserId}:notifications`;
-    await redisPublisher.publish(channel, JSON.stringify(invite));
+    const message: SocialServerMessage = {
+      type: "room_invitation",
+      invite,
+    };
+    await redisPublisher.publish(channel, JSON.stringify(message));
+  }
+
+  /**
+   * Dispara uma notificação de amizade (pedido, aceite) para o usuário alvo via Redis PubSub
+   */
+  public static async sendFriendNotification(toUserId: string, notification: import("../types").FriendNotification): Promise<void> {
+    const channel = `user:${toUserId}:notifications`;
+    const message: SocialServerMessage = {
+      type: "friend_notification",
+      notification,
+    };
+    await redisPublisher.publish(channel, JSON.stringify(message));
   }
 
   /**
@@ -179,7 +211,7 @@ export class PresenceService {
   /**
    * Assinatura local de notificações direcionadas para um usuário
    */
-  public static subscribeUserNotifications(userId: string, callback: UserInviteCallback): () => void {
+  public static subscribeUserNotifications(userId: string, callback: UserNotificationCallback): () => void {
     if (!this.userNotificationSubscribers.has(userId)) {
       this.userNotificationSubscribers.set(userId, new Set());
     }

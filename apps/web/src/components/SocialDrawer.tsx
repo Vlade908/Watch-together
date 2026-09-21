@@ -1,11 +1,29 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { createPortal } from "react-dom";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Users, X, Play, Plus, Radio, Check, Copy, Sparkles, Send } from "lucide-react";
+import {
+  Users,
+  X,
+  Play,
+  Plus,
+  Radio,
+  Check,
+  Copy,
+  Sparkles,
+  Send,
+  UserPlus,
+  UserCheck,
+  UserX,
+  Search,
+  Loader2,
+  Clock,
+  ShieldCheck,
+} from "lucide-react";
 import { CATALOG_DATA, CatalogTitle } from "@/data/mockCatalog";
 import { useSocial } from "@/context/SocialContext";
+import { useAuth } from "@/context/AuthContext";
+import { FriendUser } from "@/types/social";
 
 interface SocialDrawerProps {
   isOpen: boolean;
@@ -14,15 +32,40 @@ interface SocialDrawerProps {
 }
 
 export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: SocialDrawerProps) {
-  const { onlineUsers, activeRooms, sendInvite, currentUser } = useSocial();
+  const {
+    onlineUsers,
+    activeRooms,
+    sendInvite,
+    currentUser,
+    friends,
+    pendingRequests,
+    unreadRequestsCount,
+    sendFriendRequest,
+    acceptFriendRequest,
+    declineFriendRequest,
+    searchUsers,
+    fetchFriends,
+    inviteToParty,
+    currentParty,
+  } = useSocial();
+
+  const { isAuthenticated } = useAuth();
 
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<"friends" | "rooms" | "create">(defaultTab);
+  const [friendSubTab, setFriendSubTab] = useState<"online" | "requests" | "search">("online");
+
   const [selectedMovieForRoom, setSelectedMovieForRoom] = useState<CatalogTitle>(CATALOG_DATA[0]);
   const [roomType, setRoomType] = useState<"friends" | "public">("friends");
   const [hostOnlyControls, setHostOnlyControls] = useState(true);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [invitedUserIds, setInvitedUserIds] = useState<Set<string>>(new Set());
+
+  // Estado da busca de usuários
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<FriendUser[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
     setMounted(true);
@@ -32,17 +75,18 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     setActiveTab(defaultTab);
   }, [defaultTab, isOpen]);
 
-  // Trava a rolagem da página quando a gaveta estiver aberta
+  // Bloqueia scroll do body quando aberto
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
+      if (isAuthenticated) fetchFriends();
     } else {
       document.body.style.overflow = "unset";
     }
     return () => {
       document.body.style.overflow = "unset";
     };
-  }, [isOpen]);
+  }, [isOpen, isAuthenticated, fetchFriends]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -53,6 +97,29 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
+
+  // Busca de usuários debounced
+  useEffect(() => {
+    if (!searchQuery.trim() || !isAuthenticated) {
+      setSearchResults([]);
+      return;
+    }
+
+    let isCancelled = false;
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      const results = await searchUsers(searchQuery);
+      if (!isCancelled) {
+        setSearchResults(results);
+        setIsSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, isAuthenticated, searchUsers]);
 
   if (!mounted || !isOpen) return null;
 
@@ -65,15 +132,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
   };
 
   const handleSendInviteToFriend = (friendUserId: string) => {
-    // Sala de destino padrão ou a sala atual do usuário
-    const targetRoomId = currentUser.roomId || `sala-${selectedMovieForRoom.slug}`;
-    sendInvite(
-      friendUserId,
-      targetRoomId,
-      selectedMovieForRoom.slug,
-      selectedMovieForRoom.name,
-      selectedMovieForRoom.bannerUrl
-    );
+    inviteToParty(friendUserId);
 
     setInvitedUserIds((prev) => new Set(prev).add(friendUserId));
     setTimeout(() => {
@@ -85,39 +144,67 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     }, 4000);
   };
 
-  // Código aleatório único para a nova sala
+  const handleAddFriend = async (targetUserId: string) => {
+    setActionFeedback((prev) => ({ ...prev, [targetUserId]: "Enviando..." }));
+    const res = await sendFriendRequest(targetUserId);
+    setActionFeedback((prev) => ({
+      ...prev,
+      [targetUserId]: res.success ? "Solicitação enviada!" : (res.message || "Erro"),
+    }));
+  };
+
+  const handleAccept = async (friendshipId: string) => {
+    setActionFeedback((prev) => ({ ...prev, [friendshipId]: "Aceitando..." }));
+    await acceptFriendRequest(friendshipId);
+    setActionFeedback((prev) => {
+      const next = { ...prev };
+      delete next[friendshipId];
+      return next;
+    });
+  };
+
+  const handleDecline = async (friendshipId: string) => {
+    setActionFeedback((prev) => ({ ...prev, [friendshipId]: "Recusando..." }));
+    await declineFriendRequest(friendshipId);
+    setActionFeedback((prev) => {
+      const next = { ...prev };
+      delete next[friendshipId];
+      return next;
+    });
+  };
+
   const newGeneratedRoomCode = `sala-${selectedMovieForRoom.slug}-${Math.random().toString(36).substring(2, 6)}`;
 
-  const drawerContent = (
+  return (
     <div className="select-none">
-      {/* 1. Backdrop de fundo escuro fixo na viewport */}
+      {/* Backdrop */}
       <div
-        className="fixed inset-0 h-screen w-screen bg-black/70 backdrop-blur-sm z-[9998] transition-opacity duration-300"
+        className="fixed inset-0 h-screen w-screen bg-black/75 backdrop-blur-sm z-[9998] transition-opacity duration-300"
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* 2. Container da Gaveta Fixo na Viewport (Direita) */}
+      {/* Drawer */}
       <aside
-        className="fixed top-0 right-0 bottom-0 h-screen w-full sm:w-[420px] max-w-[90vw] z-[9999] bg-[#181818] border-l border-white/10 shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right duration-300 ease-out"
+        className="fixed top-0 right-0 bottom-0 h-screen w-full sm:w-[440px] max-w-[92vw] z-[9999] bg-[#141414] border-l border-white/10 shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right duration-300 ease-out"
         role="dialog"
         aria-modal="true"
         aria-label="Watch Together Hub"
       >
-        {/* Cabeçalho Fixo no Topo do Drawer */}
-        <div className="flex-none p-5 border-b border-white/10 flex items-center justify-between bg-[#1c1c1c]">
+        {/* Cabeçalho */}
+        <div className="flex-none p-5 border-b border-white/10 flex items-center justify-between bg-[#1a1a1a]">
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-[#E50914]/20 border border-[#E50914]/30 flex items-center justify-center">
-              <Users className="w-4 h-4 text-[#38bdf8]" />
+            <div className="w-9 h-9 rounded-xl bg-[#E50914]/20 border border-[#E50914]/40 flex items-center justify-center">
+              <Users className="w-5 h-5 text-[#38bdf8]" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-1.5">
+              <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
                 <span>Watch Together Hub</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#38bdf8]/20 text-[#38bdf8] font-bold border border-[#38bdf8]/30">
-                  LIVE
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#38bdf8]/20 text-[#38bdf8] font-bold border border-[#38bdf8]/30">
+                  SÍNCRO
                 </span>
               </h2>
-              <p className="text-xs text-neutral-400">Salas em grupo com sincronização sub-segundo</p>
+              <p className="text-xs text-neutral-400">Presença ao vivo e gestão de amizades</p>
             </div>
           </div>
 
@@ -130,18 +217,23 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
           </button>
         </div>
 
-        {/* Abas de Navegação Fixas */}
+        {/* Abas Principais */}
         <div className="flex-none flex border-b border-white/10 bg-[#161616] px-4 pt-2">
           <button
             onClick={() => setActiveTab("friends")}
-            className={`flex-1 pb-3 text-xs font-semibold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+            className={`flex-1 pb-3 text-xs font-semibold border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer relative ${
               activeTab === "friends"
                 ? "border-[#38bdf8] text-white"
                 : "border-transparent text-neutral-400 hover:text-neutral-200"
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Amigos ({onlineUsers.length})</span>
+            <span>Amigos</span>
+            {unreadRequestsCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 bg-[#E50914] text-white text-[10px] font-black rounded-full animate-pulse">
+                {unreadRequestsCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -153,7 +245,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
             }`}
           >
             <Radio className="w-3.5 h-3.5 text-[#00d26a]" />
-            <span>Salas Ativas ({activeRooms.length})</span>
+            <span>Salas ({activeRooms.length})</span>
           </button>
 
           <button
@@ -169,158 +261,347 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
           </button>
         </div>
 
-        {/* 3. Corpo com Rolagem Vertical Independente */}
+        {/* Corpo com Rolagem */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent">
-          {/* ABA 1: AMIGOS ONLINE */}
+          {/* ================= ABA 1: AMIGOS & AMIZADES ================= */}
           {activeTab === "friends" && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between text-xs text-neutral-400">
-                <span>Amigos na sua rede</span>
-                <span className="text-[#00d26a] flex items-center gap-1 font-medium">
-                  <span className="w-2 h-2 rounded-full bg-[#00d26a] animate-pulse" /> {onlineUsers.length} conectados
-                </span>
+              {/* Sub-abas de Amigos */}
+              <div className="flex p-1 bg-[#202020] rounded-xl text-xs">
+                <button
+                  onClick={() => setFriendSubTab("online")}
+                  className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
+                    friendSubTab === "online" ? "bg-[#2d2d2d] text-white shadow" : "text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  Conectados ({onlineUsers.length})
+                </button>
+                <button
+                  onClick={() => setFriendSubTab("requests")}
+                  className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer relative ${
+                    friendSubTab === "requests" ? "bg-[#2d2d2d] text-white shadow" : "text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  Pedidos
+                  {unreadRequestsCount > 0 && (
+                    <span className="ml-1 px-1.5 py-0.2 bg-[#E50914] text-white text-[10px] font-bold rounded-full">
+                      {unreadRequestsCount}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => setFriendSubTab("search")}
+                  className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
+                    friendSubTab === "search" ? "bg-[#2d2d2d] text-white shadow" : "text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  Adicionar
+                </button>
               </div>
 
-              <div className="space-y-3">
-                {onlineUsers.length === 0 ? (
-                  <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-lg">
-                    Nenhum outro amigo conectado no momento. Abra outra aba ou convide amigos para assistir!
+              {/* Sub-aba 1: Amigos Online */}
+              {friendSubTab === "online" && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-neutral-400">
+                    <span>Membros ativos em tempo real</span>
+                    <span className="text-[#00d26a] flex items-center gap-1 font-medium">
+                      <span className="w-2 h-2 rounded-full bg-[#00d26a] animate-pulse" /> {onlineUsers.length} online
+                    </span>
                   </div>
-                ) : (
-                  onlineUsers.map((friend) => (
-                    <div
-                      key={friend.userId}
-                      className="p-3.5 rounded-lg bg-[#202020] border border-white/5 hover:border-white/15 transition-all space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                          <div className="relative">
-                            <div
-                              className={`w-9 h-9 rounded-full ${friend.avatarColor || "bg-neutral-700"} text-white font-bold text-xs flex items-center justify-center shadow`}
-                            >
-                              {friend.initials || "US"}
+
+                  {onlineUsers.length === 0 ? (
+                    <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-xl border border-white/5">
+                      Nenhum outro amigo conectado no momento. Convide amigos ou compartilhe o link de uma sala!
+                    </div>
+                  ) : (
+                    onlineUsers.map((friend) => (
+                      <div
+                        key={friend.userId}
+                        className="p-3.5 rounded-xl bg-[#1e1e1e] border border-white/5 hover:border-white/15 transition-all space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="relative">
+                              <div
+                                className={`w-9 h-9 rounded-full ${friend.avatarColor || "bg-neutral-700"} text-white font-bold text-xs flex items-center justify-center shadow`}
+                              >
+                                {friend.initials || friend.userName.substring(0, 2).toUpperCase()}
+                              </div>
+                              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-[#00d26a] ring-2 ring-[#1e1e1e]" />
                             </div>
-                            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-[#00d26a] ring-2 ring-[#202020]" />
+                            <div>
+                              <p className="text-xs font-semibold text-white leading-tight">{friend.userName}</p>
+                              <p className="text-[11px] text-neutral-400 font-mono flex items-center gap-1">
+                                <span>{friend.device || "Navegador"}</span>
+                              </p>
+                            </div>
                           </div>
 
-                          <div>
-                            <p className="text-sm font-semibold text-white">{friend.userName}</p>
-                            <p className="text-[11px] text-neutral-400">{friend.device || "Navegador"}</p>
-                          </div>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-[#00d26a]/10 text-[#00d26a] border border-[#00d26a]/30">
+                            {friend.status === "watching" ? "Assistindo" : "Online"}
+                          </span>
                         </div>
 
-                        {friend.status === "watching" && friend.watchingTitle ? (
-                          <Link
-                            href={`/watch/${friend.watchingTitle.slug}?mode=room&room=${friend.roomId || "sala"}`}
-                            onClick={onClose}
-                            className="px-3 py-1.5 rounded-full bg-[#38bdf8] text-black font-bold text-xs hover:bg-[#38bdf8]/85 flex items-center space-x-1 transition-transform active:scale-95 shadow cursor-pointer"
-                          >
-                            <Play className="w-3 h-3 fill-current ml-0.5" />
-                            <span>Entrar</span>
-                          </Link>
-                        ) : (
+                        {friend.watchingTitle && (
+                          <div className="p-2.5 rounded-lg bg-[#282828] border border-white/5 flex items-center justify-between">
+                            <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                              <div
+                                className="w-10 h-7 rounded bg-cover bg-center flex-none"
+                                style={{ backgroundImage: `url('${friend.watchingTitle.bannerUrl}')` }}
+                              />
+                              <div className="min-w-0">
+                                <p className="text-[10px] text-neutral-400 truncate">Assistindo agora:</p>
+                                <p className="text-xs font-semibold text-white truncate">
+                                  {friend.watchingTitle.name}
+                                </p>
+                              </div>
+                            </div>
+
+                            {friend.roomId ? (
+                              <Link
+                                href={`/watch/${friend.watchingTitle.slug}?mode=room&room=${friend.roomId}`}
+                                onClick={onClose}
+                                className="px-2.5 py-1.5 rounded bg-[#E50914] hover:bg-[#E50914]/85 text-white font-bold text-xs flex items-center space-x-1 transition-colors flex-none cursor-pointer"
+                              >
+                                <Play className="w-3 h-3 fill-current" />
+                                <span>Entrar</span>
+                              </Link>
+                            ) : null}
+                          </div>
+                        )}
+
+                        <div className="pt-1 flex items-center justify-end">
                           <button
                             onClick={() => handleSendInviteToFriend(friend.userId)}
                             disabled={invitedUserIds.has(friend.userId)}
-                            className={`px-3 py-1.5 rounded-full border text-xs font-medium transition-all active:scale-95 cursor-pointer flex items-center space-x-1 ${
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer ${
                               invitedUserIds.has(friend.userId)
-                                ? "bg-green-500/20 border-green-500/40 text-green-400 cursor-default"
-                                : "border-white/30 text-white hover:border-white hover:bg-white/10"
+                                ? "bg-[#00d26a]/20 text-[#00d26a] border border-[#00d26a]/30"
+                                : "bg-white/10 hover:bg-white/20 text-neutral-200"
                             }`}
                           >
                             {invitedUserIds.has(friend.userId) ? (
                               <>
-                                <Check className="w-3 h-3 text-green-400" />
-                                <span>Enviado!</span>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Convite de Grupo Enviado!</span>
                               </>
                             ) : (
                               <>
-                                <Send className="w-3 h-3" />
-                                <span>Convidar</span>
+                                <Sparkles className="w-3.5 h-3.5 text-[#E50914]" />
+                                <span>Convidar p/ Grupo</span>
                               </>
                             )}
                           </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Sub-aba 2: Pedidos de Amizade */}
+              {friendSubTab === "requests" && (
+                <div className="space-y-3">
+                  {!isAuthenticated ? (
+                    <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-xl border border-white/5 space-y-3">
+                      <p>Faça login para gerenciar suas solicitações de amizade.</p>
+                      <Link
+                        href="/login"
+                        onClick={onClose}
+                        className="inline-block px-4 py-2 bg-[#E50914] text-white font-bold rounded-lg text-xs"
+                      >
+                        Entrar na Conta
+                      </Link>
+                    </div>
+                  ) : pendingRequests.length === 0 ? (
+                    <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-xl border border-white/5">
+                      Nenhuma solicitação de amizade pendente.
+                    </div>
+                  ) : (
+                    pendingRequests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="p-3.5 rounded-xl bg-[#1e1e1e] border border-white/5 space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-9 h-9 rounded-full bg-[#E50914] text-white font-bold text-xs flex items-center justify-center">
+                              {((req.isSender ? req.receiver?.name : req.sender?.name) || "U")
+                                .substring(0, 2)
+                                .toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-xs font-semibold text-white">
+                                {req.isSender ? req.receiver?.name : req.sender?.name}
+                              </p>
+                              <p className="text-[11px] text-neutral-400">
+                                {req.isSender ? "Solicitação enviada" : "Enviou um pedido de amizade"}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {!req.isSender ? (
+                          <div className="flex items-center justify-end space-x-2 pt-1">
+                            <button
+                              onClick={() => handleAccept(req.id)}
+                              disabled={!!actionFeedback[req.id]}
+                              className="px-3 py-1.5 rounded-lg bg-[#00d26a] hover:bg-[#00d26a]/90 text-black font-bold text-xs flex items-center space-x-1 cursor-pointer"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>Aceitar</span>
+                            </button>
+                            <button
+                              onClick={() => handleDecline(req.id)}
+                              disabled={!!actionFeedback[req.id]}
+                              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-300 text-xs flex items-center space-x-1 cursor-pointer"
+                            >
+                              <UserX className="w-3.5 h-3.5" />
+                              <span>Recusar</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-neutral-500 text-right">Aguardando resposta</p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Sub-aba 3: Buscar / Adicionar Amigos */}
+              {friendSubTab === "search" && (
+                <div className="space-y-4">
+                  {!isAuthenticated ? (
+                    <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-xl border border-white/5 space-y-3">
+                      <p>Faça login para buscar e adicionar outros cinéfilos.</p>
+                      <Link
+                        href="/login"
+                        onClick={onClose}
+                        className="inline-block px-4 py-2 bg-[#E50914] text-white font-bold rounded-lg text-xs"
+                      >
+                        Entrar na Conta
+                      </Link>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Input de Busca */}
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          placeholder="Buscar por nome ou e-mail..."
+                          className="w-full pl-10 pr-4 py-2.5 bg-[#202020] border border-white/10 rounded-xl text-white placeholder-neutral-500 text-xs focus:outline-none focus:border-[#38bdf8]"
+                        />
+                        {isSearching && (
+                          <Loader2 className="w-4 h-4 text-[#38bdf8] animate-spin absolute right-3.5 top-1/2 -translate-y-1/2" />
                         )}
                       </div>
 
-                      {/* Título que o amigo está assistindo agora */}
-                      {friend.status === "watching" && friend.watchingTitle && (
-                        <div className="flex items-center space-x-3 p-2 rounded bg-black/50 border border-white/5">
-                          <img
-                            src={friend.watchingTitle.bannerUrl}
-                            alt={friend.watchingTitle.name}
-                            className="w-14 aspect-video rounded object-cover flex-none"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[10px] uppercase font-bold text-[#38bdf8] flex items-center gap-1">
-                              <Radio className="w-2.5 h-2.5 animate-pulse" /> Assistindo Agora
-                            </p>
-                            <p className="text-xs font-bold text-white truncate">{friend.watchingTitle.name}</p>
-                            <p className="text-[10px] text-neutral-400 font-mono">Sala: {friend.roomId}</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
+                      {/* Resultados da Busca */}
+                      <div className="space-y-2">
+                        {searchResults.length === 0 && searchQuery.trim() && !isSearching ? (
+                          <p className="text-xs text-neutral-500 text-center py-4">Nenhum usuário encontrado.</p>
+                        ) : (
+                          searchResults.map((user) => (
+                            <div
+                              key={user.id}
+                              className="p-3 rounded-xl bg-[#1e1e1e] border border-white/5 flex items-center justify-between"
+                            >
+                              <div className="flex items-center space-x-3">
+                                <div className="w-8 h-8 rounded-full bg-[#E50914] text-white font-bold text-xs flex items-center justify-center">
+                                  {user.name.substring(0, 2).toUpperCase()}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-white">{user.name}</p>
+                                  <p className="text-[11px] text-neutral-400 truncate max-w-[180px]">{user.email}</p>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={() => handleAddFriend(user.id)}
+                                disabled={!!actionFeedback[user.id]}
+                                className="px-3 py-1.5 bg-[#E50914] hover:bg-[#E50914]/85 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <UserPlus className="w-3.5 h-3.5" />
+                                <span>{actionFeedback[user.id] || "Adicionar"}</span>
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {/* ABA 2: SALAS ATIVAS */}
+          {/* ================= ABA 2: SALAS ATIVAS AO VIVO ================= */}
           {activeTab === "rooms" && (
             <div className="space-y-4">
               <div className="flex items-center justify-between text-xs text-neutral-400">
-                <span>Salas abertas da comunidade</span>
-                <span className="text-[#38bdf8] font-medium">{activeRooms.length} ativas</span>
+                <span>Salas síncronas em execução</span>
+                <span className="text-[#38bdf8] font-medium">{activeRooms.length} salas ativas</span>
               </div>
 
-              <div className="space-y-3.5">
+              <div className="space-y-3">
                 {activeRooms.map((room) => (
                   <div
                     key={room.code}
-                    className="p-4 rounded-xl bg-[#202020] border border-white/10 hover:border-white/20 transition-all space-y-3"
+                    className="p-3.5 rounded-xl bg-[#1e1e1e] border border-white/5 hover:border-white/15 transition-all space-y-3"
                   >
-                    <div className="flex items-start space-x-3">
-                      <img
-                        src={room.title.bannerUrl}
-                        alt={room.title.name}
-                        className="w-20 aspect-video rounded-md object-cover flex-none shadow-md"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-[#46d369]">
-                            Em Reprodução
-                          </span>
-                          <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-neutral-300">
-                            {room.participantsCount}/{room.maxParticipants} pessoas
-                          </span>
+                    <div className="flex space-x-3">
+                      <div
+                        className="w-20 h-14 rounded-lg bg-cover bg-center flex-none relative overflow-hidden"
+                        style={{ backgroundImage: `url('${room.title.bannerUrl}')` }}
+                      >
+                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                          <Radio className="w-4 h-4 text-[#00d26a] animate-pulse" />
                         </div>
-                        <h3 className="text-sm font-bold text-white truncate mt-0.5">{room.title.name}</h3>
-                        <p className="text-[11px] text-neutral-400">Anfitrião: {room.hostName}</p>
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-white truncate">{room.title.name}</p>
+                        <p className="text-[11px] text-neutral-400 truncate">Host: {room.hostName}</p>
+                        <div className="flex items-center space-x-2 mt-1">
+                          <span className="text-[10px] text-[#00d26a] font-medium">
+                            {room.participantsCount}/{room.maxParticipants} assistindo
+                          </span>
+                          <span className="text-neutral-600">•</span>
+                          <span className="text-[10px] text-neutral-400 truncate">{room.syncQuality}</span>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs">
-                      <span className="text-[10px] text-neutral-400 font-mono">{room.syncQuality}</span>
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => copyInviteLink(room.code, room.title.slug)}
-                          className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white transition-colors cursor-pointer"
-                          title="Copiar link da sala"
-                        >
-                          {copiedCode === room.code ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                      <button
+                        onClick={() => copyInviteLink(room.code, room.title.slug)}
+                        className="text-[11px] text-neutral-400 hover:text-white flex items-center space-x-1 cursor-pointer"
+                      >
+                        {copiedCode === room.code ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-[#00d26a]" />
+                            <span className="text-[#00d26a]">Link Copiado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copiar Link</span>
+                          </>
+                        )}
+                      </button>
 
-                        <Link
-                          href={`/watch/${room.title.slug}?mode=room&room=${room.code}`}
-                          onClick={onClose}
-                          className="px-4 py-1.5 rounded-full bg-[#E50914] text-white font-bold text-xs hover:bg-[#E50914]/85 transition-all shadow-md flex items-center space-x-1 cursor-pointer"
-                        >
-                          <Play className="w-3 h-3 fill-current ml-0.5" />
-                          <span>Entrar</span>
-                        </Link>
-                      </div>
+                      <Link
+                        href={`/watch/${room.title.slug}?mode=room&room=${room.code}`}
+                        onClick={onClose}
+                        className="px-3.5 py-1.5 rounded-lg bg-[#E50914] hover:bg-[#E50914]/85 text-white font-bold text-xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                      >
+                        <Play className="w-3 h-3 fill-current" />
+                        <span>Entrar na Sala</span>
+                      </Link>
                     </div>
                   </div>
                 ))}
@@ -328,107 +609,58 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
             </div>
           )}
 
-          {/* ABA 3: CRIAR NOVA SALA */}
+          {/* ================= ABA 3: CRIAR SALA ================= */}
           {activeTab === "create" && (
-            <div className="space-y-4">
-              <div className="p-3.5 rounded-lg bg-[#202020] border border-white/10 space-y-3">
-                <label className="text-xs font-bold text-white block">1. Selecione o Filme ou Série</label>
-                <select
-                  value={selectedMovieForRoom.id}
-                  onChange={(e) => {
-                    const found = CATALOG_DATA.find((t) => t.id === e.target.value);
-                    if (found) setSelectedMovieForRoom(found);
-                  }}
-                  className="w-full bg-black/60 border border-white/20 rounded p-2 text-xs text-white focus:outline-none focus:border-white cursor-pointer"
-                >
-                  {CATALOG_DATA.map((item) => (
-                    <option key={item.id} value={item.id} className="bg-[#181818] text-white">
-                      {item.name} ({item.releaseYear} - {item.type === "SERIES" ? `${item.totalSeasons} Temporadas` : "Filme"})
-                    </option>
-                  ))}
-                </select>
-
-                <div className="flex items-center space-x-3 pt-2">
-                  <img
-                    src={selectedMovieForRoom.bannerUrl}
-                    alt={selectedMovieForRoom.name}
-                    className="w-20 aspect-video rounded object-cover shadow"
-                  />
-                  <div>
-                    <p className="text-xs font-bold text-white">{selectedMovieForRoom.name}</p>
-                    <p className="text-[10px] text-neutral-400 line-clamp-2">{selectedMovieForRoom.synopsis}</p>
-                  </div>
+            <div className="space-y-5">
+              <div className="p-4 rounded-xl bg-gradient-to-r from-[#E50914]/15 to-[#38bdf8]/15 border border-[#E50914]/30">
+                <div className="flex items-center space-x-2 text-[#E50914] text-xs font-bold uppercase tracking-wider mb-1">
+                  <Sparkles className="w-4 h-4" />
+                  <span>Sessão Watch Together</span>
                 </div>
+                <p className="text-xs text-neutral-300">
+                  Crie uma sala instantânea com sincronização NTP autoritativa e convide amigos.
+                </p>
               </div>
 
-              {/* Configurações de Privacidade */}
-              <div className="p-3.5 rounded-lg bg-[#202020] border border-white/10 space-y-2.5 text-xs">
-                <label className="font-bold text-white block">2. Visibilidade da Sessão</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRoomType("friends")}
-                    className={`p-2.5 rounded text-left border transition-all cursor-pointer ${
-                      roomType === "friends"
-                        ? "border-[#38bdf8] bg-[#38bdf8]/10 text-white font-bold"
-                        : "border-white/10 text-neutral-400 hover:text-white"
-                    }`}
-                  >
-                    <Users className="w-4 h-4 mb-1 text-[#38bdf8]" />
-                    <p className="text-xs">Apenas Amigos</p>
-                    <p className="text-[10px] font-normal text-neutral-400">Acesso por convite</p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setRoomType("public")}
-                    className={`p-2.5 rounded text-left border transition-all cursor-pointer ${
-                      roomType === "public"
-                        ? "border-[#00d26a] bg-[#00d26a]/10 text-white font-bold"
-                        : "border-white/10 text-neutral-400 hover:text-white"
-                    }`}
-                  >
-                    <Radio className="w-4 h-4 mb-1 text-[#00d26a]" />
-                    <p className="text-xs">Sala Aberta</p>
-                    <p className="text-[10px] font-normal text-neutral-400">Visível no hub</p>
-                  </button>
-                </div>
-              </div>
-
-              {/* Controle de Reprodução */}
-              <div className="p-3.5 rounded-lg bg-[#202020] border border-white/10 space-y-2.5 text-xs">
-                <label className="font-bold text-white block">3. Permissões de Reprodução</label>
-                <label className="flex items-center space-x-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={hostOnlyControls}
-                    onChange={(e) => setHostOnlyControls(e.target.checked)}
-                    className="rounded bg-black border-white/40 text-[#E50914] focus:ring-0 cursor-pointer"
-                  />
-                  <div>
-                    <p className="text-white font-medium">Apenas o Anfitrião pode pausar/avançar</p>
-                    <p className="text-[10px] text-neutral-400">Evita pausas acidentais por convidados</p>
-                  </div>
+              {/* Seleção do Filme */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
+                  Selecionar Título do Catálogo
                 </label>
+                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin scrollbar-thumb-neutral-700">
+                  {CATALOG_DATA.map((movie) => (
+                    <div
+                      key={movie.id}
+                      onClick={() => setSelectedMovieForRoom(movie)}
+                      className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center space-x-2 ${
+                        selectedMovieForRoom.id === movie.id
+                          ? "bg-[#E50914]/20 border-[#E50914] text-white"
+                          : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
+                      }`}
+                    >
+                      <div
+                        className="w-10 h-8 rounded bg-cover bg-center flex-none"
+                        style={{ backgroundImage: `url('${movie.bannerUrl}')` }}
+                      />
+                      <span className="text-xs font-medium truncate">{movie.name}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Botão de Criação */}
-              <div className="pt-2">
-                <Link
-                  href={`/watch/${selectedMovieForRoom.slug}?mode=room&room=${newGeneratedRoomCode}&created=true`}
-                  onClick={onClose}
-                  className="w-full py-3 rounded-lg bg-[#E50914] hover:bg-[#E50914]/85 text-white font-bold text-sm shadow-xl flex items-center justify-center space-x-2 transition-transform active:scale-98 cursor-pointer"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>Iniciar Sala de Reprodução</span>
-                </Link>
-              </div>
+              <Link
+                href={`/watch/${selectedMovieForRoom.slug}?mode=room&room=${newGeneratedRoomCode}`}
+                onClick={onClose}
+                className="w-full py-3.5 px-4 bg-gradient-to-r from-[#B20710] to-[#E50914] hover:from-[#c20812] hover:to-[#ff2b36] text-white font-bold rounded-xl shadow-lg shadow-[#E50914]/30 transition-all flex items-center justify-center space-x-2 text-xs uppercase tracking-wider cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Iniciar Sala Agora</span>
+              </Link>
             </div>
           )}
         </div>
       </aside>
     </div>
   );
-
-  return createPortal(drawerContent, document.body);
 }

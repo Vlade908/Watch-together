@@ -1,11 +1,12 @@
 import { WebSocket } from "ws";
 import { FastifyRequest } from "fastify";
 import { PresenceService } from "../services/presenceService";
+import { PartyService } from "../services/partyService";
 import { UserPresence, SocialClientMessage, SocialServerMessage, RoomInvite } from "../types";
 
 export function handleSocialWebSocket(
   socket: WebSocket,
-  req: FastifyRequest<{ Querystring: { userId?: string; userName?: string } }>
+  req: FastifyRequest<{ Querystring: { userId?: string; userName?: string; token?: string } }>
 ) {
   const clientIp = req.ip || "unknown";
   const origin = (req.headers.origin as string) || "direct";
@@ -16,6 +17,7 @@ export function handleSocialWebSocket(
   let currentUser: UserPresence | null = null;
   let unsubscribeGlobal: (() => void) | null = null;
   let unsubscribeNotifications: (() => void) | null = null;
+  let unsubscribeParty: (() => void) | null = null;
 
   const send = (msg: SocialServerMessage) => {
     if (socket.readyState === WebSocket.OPEN) {
@@ -29,33 +31,52 @@ export function handleSocialWebSocket(
     console.error(`[${errTs}] [WS /ws/social] [WS Error]:`, err.message);
   });
 
-  // Se o query param tiver userId e userName, faz o bootstrap automático
-  const queryUserId = req.query.userId;
-  const queryUserName = req.query.userName;
+  const setupPartySubscription = (partyId: string | null) => {
+    if (unsubscribeParty) {
+      unsubscribeParty();
+      unsubscribeParty = null;
+    }
+    if (partyId) {
+      unsubscribeParty = PartyService.subscribeParty(partyId, (msg: SocialServerMessage) => {
+        send(msg);
+      });
+    }
+  };
 
   const setupUser = async (user: UserPresence) => {
     currentUser = user;
     await PresenceService.upsertPresence(currentUser);
 
-    // Assina canal de notificações privadas deste usuário
+    // Assina canal de notificações privadas deste usuário (convites de sala, amizades, convites de party)
     if (unsubscribeNotifications) unsubscribeNotifications();
-    unsubscribeNotifications = PresenceService.subscribeUserNotifications(currentUser.userId, (invite: RoomInvite) => {
-      send({
-        type: "room_invitation",
-        invite,
-      });
+    unsubscribeNotifications = PresenceService.subscribeUserNotifications(currentUser.userId, async (msg: SocialServerMessage) => {
+      send(msg);
+      // Se for notificação de atualização de party, atualiza a subscrição
+      if (msg.type === "party_updated") {
+        setupPartySubscription(msg.party.id);
+      }
     });
 
-    // Envia snapshot completo para o cliente
-    const [onlineUsers, activeRooms] = await Promise.all([
+    // Envia snapshot completo (usuários, salas e party ativa)
+    const [onlineUsers, activeRooms, currentParty] = await Promise.all([
       PresenceService.getAllOnlineUsers(),
       PresenceService.getActiveRooms(),
+      PartyService.getUserParty(currentUser.userId),
     ]);
+
+    if (currentParty) {
+      setupPartySubscription(currentParty.id);
+    }
 
     send({
       type: "social_snapshot",
       onlineUsers,
       activeRooms,
+    });
+
+    send({
+      type: "party_snapshot",
+      party: currentParty,
     });
   };
 
@@ -64,16 +85,34 @@ export function handleSocialWebSocket(
     send(msg);
   });
 
-  if (queryUserId) {
+  const token = (req.query as any).token;
+
+  if (!token) {
+    console.warn(`[${timestamp}] [WS /ws/social] Conexão rejeitada de ${clientIp}: token JWT ausente.`);
+    send({ type: "error", message: "Autenticação obrigatória para presença em tempo real." });
+    socket.close(4001, "Unauthorized");
+    return;
+  }
+
+  try {
+    const decoded: any = (req.server as any).jwt.verify(token);
+    if (!decoded || !decoded.sub) {
+      throw new Error("Token payload inválido");
+    }
     setupUser({
-      userId: queryUserId,
-      userName: queryUserName || "Você",
-      avatarColor: "bg-red-600",
-      initials: (queryUserName || "VC").substring(0, 2).toUpperCase(),
+      userId: decoded.sub,
+      userName: decoded.name || "Você",
+      avatarColor: "bg-[#e50914]",
+      initials: (decoded.name || "VC").substring(0, 2).toUpperCase(),
       status: "idle",
       device: "Web Browser",
       lastSeen: Date.now(),
     });
+  } catch (tokenErr) {
+    console.warn(`[${timestamp}] [WS /ws/social] Conexão rejeitada de ${clientIp}: token JWT inválido ou expirado.`);
+    send({ type: "error", message: "Token inválido ou expirado." });
+    socket.close(4001, "Unauthorized");
+    return;
   }
 
   socket.on("message", async (data: Buffer | string) => {
@@ -87,7 +126,7 @@ export function handleSocialWebSocket(
           break;
         }
 
-        // 2. Atualização de status (ex: começou a assistir um filme ou voltou pra Home)
+        // 2. Atualização de status de presença
         case "social_update_presence": {
           if (!currentUser) return;
           currentUser = {
@@ -101,7 +140,7 @@ export function handleSocialWebSocket(
           break;
         }
 
-        // 3. Envio de Convite para Sala Watch Together
+        // 3. Convite direto para Sala Watch Together
         case "send_invite": {
           if (!currentUser) return;
           const invite: RoomInvite = {
@@ -126,21 +165,91 @@ export function handleSocialWebSocket(
 
         // 4. Solicitação de snapshot atualizado
         case "get_social_snapshot": {
-          const [onlineUsers, activeRooms] = await Promise.all([
+          const [onlineUsers, activeRooms, currentParty] = await Promise.all([
             PresenceService.getAllOnlineUsers(),
             PresenceService.getActiveRooms(),
+            currentUser ? PartyService.getUserParty(currentUser.userId) : null,
           ]);
           send({
             type: "social_snapshot",
             onlineUsers,
             activeRooms,
           });
+          send({
+            type: "party_snapshot",
+            party: currentParty,
+          });
+          break;
+        }
+
+        // ================= WATCH PARTY LOBBY (GRUPO COLABORATIVO) =================
+        case "party_create": {
+          if (!currentUser) return;
+          const party = await PartyService.createOrGetParty({
+            userId: currentUser.userId,
+            name: currentUser.userName,
+          });
+          setupPartySubscription(party.id);
+          send({ type: "party_snapshot", party });
+          break;
+        }
+
+        case "party_invite": {
+          if (!currentUser) return;
+          const { party } = await PartyService.inviteMember(
+            { userId: currentUser.userId, name: currentUser.userName },
+            parsed.targetUserId
+          );
+          setupPartySubscription(party.id);
+          send({ type: "party_snapshot", party });
+          break;
+        }
+
+        case "party_accept_invite": {
+          if (!currentUser) return;
+          const party = await PartyService.joinParty(parsed.partyId, {
+            userId: currentUser.userId,
+            name: currentUser.userName,
+          });
+          setupPartySubscription(party.id);
+          send({ type: "party_snapshot", party });
+          break;
+        }
+
+        case "party_decline_invite": {
+          // Opcional: apenas confirma sem alterar o estado
+          break;
+        }
+
+        case "party_leave": {
+          if (!currentUser) return;
+          await PartyService.leaveParty(currentUser.userId);
+          setupPartySubscription(null);
+          send({ type: "party_snapshot", party: null });
+          break;
+        }
+
+        case "party_start_media": {
+          if (!currentUser) return;
+          await PartyService.startMedia(currentUser.userId, {
+            slug: parsed.slug,
+            title: parsed.title,
+            roomId: parsed.roomId,
+          });
+          break;
+        }
+
+        case "party_get_snapshot": {
+          if (!currentUser) return;
+          const party = await PartyService.getUserParty(currentUser.userId);
+          if (party) setupPartySubscription(party.id);
+          send({ type: "party_snapshot", party });
           break;
         }
       }
     } catch (err: any) {
       console.error("[Social WS Handler Error]:", err.message);
-      send({ type: "error", message: "Comando social inválido." });
+      send({ type: "error", message: err.message || "Erro no processamento da solicitação." });
     }
   });
 
@@ -149,6 +258,7 @@ export function handleSocialWebSocket(
     console.log(`[${closeTs}] [WS /ws/social] [WS Close] Código: ${code}, Motivo: ${reason?.toString() || "desconexão normal"}`);
     if (unsubscribeGlobal) unsubscribeGlobal();
     if (unsubscribeNotifications) unsubscribeNotifications();
+    if (unsubscribeParty) unsubscribeParty();
 
     if (currentUser) {
       await PresenceService.removePresence(currentUser.userId);

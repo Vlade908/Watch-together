@@ -5,7 +5,10 @@ import { PubSubService } from "../services/pubsubService";
 import { PresenceService } from "../services/presenceService";
 import { ClientMessage, ServerMessage, RoomMember } from "../types";
 
-export function handleRoomWebSocket(socket: WebSocket, req: FastifyRequest<{ Params: { roomId: string } }>) {
+export function handleRoomWebSocket(
+  socket: WebSocket,
+  req: FastifyRequest<{ Params: { roomId: string }; Querystring: { token?: string } }>
+) {
   const { roomId } = req.params;
   const clientIp = req.ip || "unknown";
   const origin = (req.headers.origin as string) || "direct";
@@ -22,6 +25,31 @@ export function handleRoomWebSocket(socket: WebSocket, req: FastifyRequest<{ Par
       socket.send(JSON.stringify(msg));
     }
   };
+
+  // Extrai e valida obrigatoriamente a identidade via JWT token
+  const token = (req.query as any)?.token;
+  let authenticatedUser: { id: string; name: string } | null = null;
+
+  if (!token) {
+    console.warn(`[${timestamp}] [WS /ws/rooms/${roomId}] Conexão rejeitada de ${clientIp}: token JWT ausente.`);
+    send({ type: "error", message: "Autenticação obrigatória para acessar salas síncronas." });
+    socket.close(4001, "Unauthorized");
+    return;
+  }
+
+  try {
+    const decoded: any = (req.server as any).jwt.verify(token);
+    if (decoded && decoded.sub) {
+      authenticatedUser = { id: decoded.sub, name: decoded.name || "Membro" };
+    } else {
+      throw new Error("Payload JWT inválido");
+    }
+  } catch (tokenErr) {
+    console.warn(`[${timestamp}] [WS /ws/rooms/${roomId}] Conexão rejeitada de ${clientIp}: token JWT inválido ou expirado.`);
+    send({ type: "error", message: "Sessão expirada ou token inválido. Faça login novamente." });
+    socket.close(4001, "Unauthorized");
+    return;
+  }
 
   // Registra o WebSocket para receber broadcasts do Redis da sala
   const unsubscribe = PubSubService.subscribeLocal(roomId, (msg) => {
@@ -59,9 +87,11 @@ export function handleRoomWebSocket(socket: WebSocket, req: FastifyRequest<{ Par
         // 2. Entrada do Usuário na Sala
         case "join_room": {
           const isFirstMember = (await RoomService.getMembers(roomId)).length === 0;
+          const memberUserId = authenticatedUser?.id || parsed.userId;
+          const memberUserName = authenticatedUser?.name || parsed.userName;
           currentMember = {
-            userId: parsed.userId,
-            userName: parsed.userName,
+            userId: memberUserId,
+            userName: memberUserName,
             isHost: parsed.isHost !== undefined ? parsed.isHost : isFirstMember,
             joinedAt: Date.now(),
           };

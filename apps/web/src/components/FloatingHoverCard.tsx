@@ -158,7 +158,9 @@ export function FloatingHoverCard() {
               muted={isMuted}
               loop
               playsInline
+              crossOrigin="anonymous"
               onPlaying={() => setIsVideoReady(true)}
+              onError={() => setIsVideoReady(false)}
               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
                 isVideoReady ? "opacity-100" : "opacity-0"
               }`}

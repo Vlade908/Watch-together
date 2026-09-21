@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Search, Bell, Users, ChevronDown, X, Film, LogOut, Settings, User } from "lucide-react";
 import { SocialDrawer } from "./SocialDrawer";
 import { useSocial } from "@/context/SocialContext";
+import { useAuth } from "@/context/AuthContext";
 
 export function Navbar() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -26,6 +27,8 @@ export function Navbar() {
     markAllInvitesAsRead,
     dismissToast,
   } = useSocial();
+
+  const { user: authUser, isAuthenticated, logout } = useAuth();
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
@@ -127,7 +130,7 @@ export function Navbar() {
             {/* Logo Estilizado Netflix Grade */}
             <Link href="/" className="flex items-center space-x-1.5 focus:outline-none">
               <span className="text-2xl sm:text-3xl font-black tracking-tighter text-[#E50914] select-none hover:opacity-95 transition-opacity">
-                NETFLIX
+                POBREFLIX
               </span>
               <span className="hidden sm:inline-block text-[10px] uppercase font-extrabold tracking-widest px-1.5 py-0.5 rounded bg-[#E50914]/20 text-[#E50914] border border-[#E50914]/40 ml-1">
                 Together
@@ -316,57 +319,69 @@ export function Navbar() {
               )}
             </div>
 
-            {/* Menu de Perfil / Avatar */}
-            <div className="relative" ref={profileMenuRef}>
-              <button
-                onClick={() => setShowProfileMenu(!showProfileMenu)}
-                className="flex items-center space-x-1.5 focus:outline-none group cursor-pointer"
-              >
-                {/* Avatar Quadrado clássico da Netflix com iniciais reais */}
-                <div className={`w-8 h-8 rounded ${currentUser.avatarColor || "bg-[#e50914]"} flex items-center justify-center text-white font-black text-xs shadow`}>
-                  {currentUser.initials || "VP"}
-                </div>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-neutral-400 group-hover:text-white transition-transform duration-300 ${
-                    showProfileMenu ? "rotate-180" : ""
-                  }`}
-                />
-              </button>
-
-              {showProfileMenu && (
-                <div className="absolute right-0 mt-3 w-56 bg-[#181818] border border-white/15 rounded shadow-2xl py-2 z-50 text-xs space-y-1 animate-in fade-in zoom-in-95 duration-200">
-                  <div className="px-4 py-2 border-b border-white/10">
-                    <p className="text-white font-bold">{currentUser.userName}</p>
-                    <p className="text-neutral-400 text-[11px] font-mono">{currentUser.userId}</p>
+            {/* Menu de Perfil / Avatar ou Botão de Login */}
+            {isAuthenticated && authUser ? (
+              <div className="relative" ref={profileMenuRef}>
+                <button
+                  onClick={() => setShowProfileMenu(!showProfileMenu)}
+                  className="flex items-center space-x-1.5 focus:outline-none group cursor-pointer"
+                >
+                  <div className="w-8 h-8 rounded bg-[#e50914] flex items-center justify-center text-white font-black text-xs shadow">
+                    {(authUser.name || "U").substring(0, 2).toUpperCase()}
                   </div>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 text-neutral-400 group-hover:text-white transition-transform duration-300 ${
+                      showProfileMenu ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
 
-                  <div className="px-2 py-1">
-                    <button
-                      onClick={() => {
-                        setShowProfileMenu(false);
-                        setSocialDrawerTab("friends");
-                        setIsSocialDrawerOpen(true);
-                      }}
-                      className="w-full flex items-center space-x-2.5 px-3 py-2 rounded text-neutral-300 hover:text-white hover:bg-white/10 transition-colors text-left cursor-pointer"
-                    >
-                      <Users className="w-4 h-4 text-[#38bdf8]" />
-                      <span>Amigos & Salas</span>
-                    </button>
-                    <button className="w-full flex items-center space-x-2.5 px-3 py-2 rounded text-neutral-300 hover:text-white hover:bg-white/10 transition-colors text-left cursor-pointer">
-                      <Settings className="w-4 h-4" />
-                      <span>Preferências de Vídeo</span>
-                    </button>
-                  </div>
+                {showProfileMenu && (
+                  <div className="absolute right-0 mt-3 w-56 bg-[#181818] border border-white/15 rounded shadow-2xl py-2 z-50 text-xs space-y-1 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="px-4 py-2 border-b border-white/10">
+                      <p className="text-white font-bold">{authUser.name}</p>
+                      <p className="text-neutral-400 text-[11px] truncate">{authUser.email}</p>
+                    </div>
 
-                  <div className="border-t border-white/10 pt-1 px-2">
-                    <button className="w-full flex items-center space-x-2.5 px-3 py-2 rounded text-[#E50914] hover:bg-[#E50914]/10 transition-colors text-left font-semibold cursor-pointer">
-                      <LogOut className="w-4 h-4" />
-                      <span>Sair da Sessão</span>
-                    </button>
+                    <div className="px-2 py-1">
+                      <button
+                        onClick={() => {
+                          setShowProfileMenu(false);
+                          setSocialDrawerTab("friends");
+                          setIsSocialDrawerOpen(true);
+                        }}
+                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded text-neutral-300 hover:text-white hover:bg-white/10 transition-colors text-left cursor-pointer"
+                      >
+                        <Users className="w-4 h-4 text-[#38bdf8]" />
+                        <span>Amigos & Salas</span>
+                      </button>
+                    </div>
+
+                    <div className="border-t border-white/10 pt-1 px-2">
+                      <button
+                        onClick={() => {
+                          setShowProfileMenu(false);
+                          logout();
+                        }}
+                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded text-[#E50914] hover:bg-[#E50914]/10 transition-colors text-left font-semibold cursor-pointer"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>Sair da Conta</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center space-x-2">
+                <Link
+                  href="/login"
+                  className="px-4 py-1.5 rounded-md bg-[#E50914] hover:bg-[#E50914]/90 text-white font-bold text-xs shadow-md shadow-[#E50914]/30 transition-all duration-200 cursor-pointer"
+                >
+                  Entrar
+                </Link>
+              </div>
+            )}
           </div>
         </div>
 

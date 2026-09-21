@@ -47,7 +47,9 @@ export function HeroBanner({ title }: HeroBannerProps) {
             muted={isMutedGlobal}
             loop
             playsInline
+            crossOrigin="anonymous"
             onPlaying={() => setIsVideoLoaded(true)}
+            onError={() => setIsVideoLoaded(false)}
             className={`absolute inset-0 w-full h-full object-cover object-[center_20%] transition-opacity duration-1000 ${
               isVideoLoaded ? "opacity-100" : "opacity-0"
             }`}

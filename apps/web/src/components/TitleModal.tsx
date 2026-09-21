@@ -71,10 +71,12 @@ export function TitleModal() {
           {selectedTitle.previewVideoUrl ? (
             <video
               src={selectedTitle.previewVideoUrl}
+              poster={selectedTitle.bannerUrl}
               autoPlay
               muted={isMutedGlobal}
               loop
               playsInline
+              crossOrigin="anonymous"
               className="w-full h-full object-cover"
             />
           ) : (

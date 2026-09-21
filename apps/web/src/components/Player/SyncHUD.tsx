@@ -80,6 +80,15 @@ export function SyncHUD({
 
   const status = getStatusDetails();
 
+  // Ordena os membros para garantir que o Host fique sempre no topo
+  const sortedMembers = React.useMemo(() => {
+    return [...members].sort((a, b) => {
+      if (a.isHost && !b.isHost) return -1;
+      if (!a.isHost && b.isHost) return 1;
+      return 0;
+    });
+  }, [members]);
+
   return (
     <div className="absolute top-5 right-5 z-40 select-none">
       {/* Botão Pílula Compacto do HUD */}
@@ -93,20 +102,24 @@ export function SyncHUD({
           {status.text}
         </span>
 
-        {/* Avatares Empilhados dos Membros da Sala */}
+        {/* Avatares Empilhados dos Membros da Sala com destaque dourado para o Host */}
         <div className="flex items-center -space-x-1.5 pl-1.5 border-l border-white/20">
-          {members.slice(0, 3).map((member, idx) => (
+          {sortedMembers.slice(0, 3).map((member, idx) => (
             <div
               key={member.userId || idx}
-              title={member.userName}
-              className="w-5 h-5 rounded-full bg-neutral-700 border border-black flex items-center justify-center text-[9px] font-bold text-white shadow-xs"
+              title={member.isHost ? `${member.userName} (Host)` : member.userName}
+              className={`w-5 h-5 rounded-full bg-neutral-700 flex items-center justify-center text-[9px] font-bold text-white shadow-xs ${
+                member.isHost
+                  ? "ring-2 ring-amber-400 border border-black z-10"
+                  : "border border-black"
+              }`}
             >
               {member.userName.charAt(0).toUpperCase()}
             </div>
           ))}
-          {members.length > 3 && (
+          {sortedMembers.length > 3 && (
             <div className="w-5 h-5 rounded-full bg-neutral-800 border border-black flex items-center justify-center text-[8px] font-bold text-neutral-300">
-              +{members.length - 3}
+              +{sortedMembers.length - 3}
             </div>
           )}
         </div>
@@ -158,28 +171,38 @@ export function SyncHUD({
             </button>
           </div>
 
-          {/* Lista de Pessoas Conectadas */}
+          {/* Lista de Pessoas Conectadas com Host no Topo */}
           <div className="space-y-1.5">
             <span className="text-[11px] font-semibold text-neutral-400 block">
-              Pessoas na Sala ({members.length})
+              Pessoas na Sala ({sortedMembers.length})
             </span>
-            <div className="max-h-32 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-              {members.map((member) => (
+            <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
+              {sortedMembers.map((member) => (
                 <div
                   key={member.userId}
-                  className="flex items-center justify-between p-1.5 rounded hover:bg-white/5"
+                  className={`flex items-center justify-between p-2 rounded-lg transition-colors ${
+                    member.isHost
+                      ? "bg-amber-400/10 border border-amber-400/20"
+                      : "bg-white/5 border border-transparent hover:bg-white/10"
+                  }`}
                 >
-                  <div className="flex items-center space-x-2">
-                    <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-[10px] font-bold text-white shadow">
+                  <div className="flex items-center space-x-2.5 min-w-0">
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow flex-none ${
+                        member.isHost
+                          ? "bg-amber-500 ring-2 ring-amber-400 ring-offset-2 ring-offset-black"
+                          : "bg-blue-600"
+                      }`}
+                    >
                       {member.userName.charAt(0).toUpperCase()}
                     </div>
-                    <span className="text-white font-medium text-xs">
+                    <span className="text-white font-medium text-xs truncate">
                       {member.userName}
                     </span>
                   </div>
                   {member.isHost && (
-                    <span className="flex items-center space-x-0.5 text-[10px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.2 rounded border border-amber-400/20">
-                      <Crown className="w-3 h-3" />
+                    <span className="flex items-center space-x-1 text-[10px] text-amber-300 font-bold bg-amber-400/20 px-2 py-0.5 rounded border border-amber-400/30 flex-none shadow-xs">
+                      <Crown className="w-3 h-3 fill-current text-amber-400" />
                       <span>Host</span>
                     </span>
                   )}
