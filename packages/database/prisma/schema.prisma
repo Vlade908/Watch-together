@@ -1,0 +1,265 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+enum TitleType {
+  MOVIE
+  SERIES
+}
+
+enum MediaStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum RoomControlMode {
+  HOST_ONLY
+  DEMOCRATIC
+}
+
+enum RoomStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum RoomMemberRole {
+  HOST
+  MODERATOR
+  VIEWER
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  BLOCKED
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  name          String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  profiles      Profile[]
+  hostedRooms   Room[]         @relation("HostRooms")
+  memberships   RoomMember[]
+  sentFriends   Friendship[]   @relation("SenderFriendships")
+  recvFriends   Friendship[]   @relation("ReceiverFriendships")
+  ratings       UserRating[]
+  userEmbedding UserEmbedding?
+
+  @@map("users")
+}
+
+model Profile {
+  id              String          @id @default(uuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  avatarUrl       String?
+  isKid           Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  watchProgresses WatchProgress[]
+
+  @@map("profiles")
+}
+
+model Title {
+  id              String            @id @default(uuid())
+  slug            String            @unique
+  name            String
+  synopsis        String
+  releaseYear     Int
+  ageRating       String            @default("14")
+  durationMinutes Int?              // Para filmes
+  type            TitleType         @default(MOVIE)
+  bannerUrl       String
+  posterUrl       String
+  trailerUrl      String?
+  genres          String[]          @default([])
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  seasons         Season[]
+  mediaAsset      MediaAsset?       @relation("TitleMedia")
+  watchProgresses WatchProgress[]
+  rooms           Room[]
+  embedding       TitleEmbedding?
+  ratings         UserRating[]
+
+  @@map("titles")
+}
+
+model Season {
+  id           String    @id @default(uuid())
+  titleId      String
+  title        Title     @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  seasonNumber Int
+  name         String
+  synopsis     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  episodes     Episode[]
+
+  @@unique([titleId, seasonNumber])
+  @@map("seasons")
+}
+
+model Episode {
+  id              String          @id @default(uuid())
+  seasonId        String
+  season          Season          @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  episodeNumber   Int
+  name            String
+  synopsis        String?
+  durationMinutes Int
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  mediaAsset      MediaAsset?     @relation("EpisodeMedia")
+  watchProgresses WatchProgress[]
+  rooms           Room[]
+
+  @@unique([seasonId, episodeNumber])
+  @@map("episodes")
+}
+
+model MediaAsset {
+  id                 String      @id @default(uuid())
+  titleId            String?     @unique
+  title              Title?      @relation("TitleMedia", fields: [titleId], references: [id], onDelete: Cascade)
+  episodeId          String?     @unique
+  episode            Episode?    @relation("EpisodeMedia", fields: [episodeId], references: [id], onDelete: Cascade)
+  
+  masterPlaylistUrl  String
+  hlsResolutions     Json        @default("[]") // [{ resolution: "1080p", url: "...", bitrate: 4500000 }]
+  spriteVttUrl       String?
+  spriteImageUrl     String?
+  durationSeconds    Float
+  status             MediaStatus @default(PENDING)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@map("media_assets")
+}
+
+model WatchProgress {
+  id                  String    @id @default(uuid())
+  profileId           String
+  profile             Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  titleId             String
+  title               Title     @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  episodeId           String?
+  episode             Episode?  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  
+  lastPositionSeconds Float     @default(0)
+  durationSeconds     Float
+  percentageCompleted Float     @default(0)
+  isFinished          Boolean   @default(false)
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([profileId, titleId, episodeId])
+  @@map("watch_progress")
+}
+
+model Room {
+  id            String          @id @default(uuid())
+  code          String          @unique // Código amigável tipo "NET-4829"
+  name          String
+  hostId        String
+  host          User            @relation("HostRooms", fields: [hostId], references: [id], onDelete: Cascade)
+  titleId       String
+  title         Title           @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  episodeId     String?
+  episode       Episode?        @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+  
+  isPrivate     Boolean         @default(false)
+  passwordHash  String?
+  controlMode   RoomControlMode @default(HOST_ONLY)
+  status        RoomStatus      @default(ACTIVE)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  members       RoomMember[]
+
+  @@map("rooms")
+}
+
+model RoomMember {
+  id         String         @id @default(uuid())
+  roomId     String
+  room       Room           @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       RoomMemberRole @default(VIEWER)
+  joinedAt   DateTime       @default(now())
+  lastSeenAt DateTime       @default(now())
+
+  @@unique([roomId, userId])
+  @@map("room_members")
+}
+
+model Friendship {
+  id         String           @id @default(uuid())
+  senderId   String
+  sender     User             @relation("SenderFriendships", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User             @relation("ReceiverFriendships", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     FriendshipStatus @default(PENDING)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([senderId, receiverId])
+  @@map("friendships")
+}
+
+model TitleEmbedding {
+  id        String                       @id @default(uuid())
+  titleId   String                       @unique
+  title     Title                        @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  embedding Unsupported("vector(1536)")? // Vetor denso indexado com HNSW via pgvector
+  modelName String                       @default("deterministic-semantic-1536")
+  createdAt DateTime                     @default(now())
+
+  @@map("title_embeddings")
+}
+
+model UserRating {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  titleId   String
+  title     Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  rating    Float    // Nota de 1.0 a 5.0 estrelas para treino de SVD/CF
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, titleId])
+  @@map("user_ratings")
+}
+
+model UserEmbedding {
+  id        String                       @id @default(uuid())
+  userId    String                       @unique
+  user      User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  embedding Unsupported("vector(1536)")? // Fatores latentes do usuário gerados por ML em Python
+  modelName String                       @default("svd-latent-factors")
+  updatedAt DateTime                     @updatedAt
+
+  @@map("user_embeddings")
+}
+
