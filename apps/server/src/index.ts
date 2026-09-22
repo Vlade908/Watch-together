@@ -82,23 +82,33 @@ fastify.setErrorHandler((error: any, request, reply) => {
 });
 
 async function main() {
-  // VULN-02: Política Restrita de CORS baseada em lista de origens autorizadas (sem wildcard com credenciais)
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim().replace(/\/$/, ""))
-    : [
-        (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, ""),
-        "http://127.0.0.1:3000",
-      ];
+  // VULN-02: Política Defensiva de CORS
+  const isDevelopment = process.env.NODE_ENV !== "production";
+  const envOrigins = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((s) => s.trim().replace(/\/$/, ""))
+    .filter(Boolean);
 
   await fastify.register(cors, {
     origin: (origin, cb) => {
       // Permite requisições sem cabeçalho Origin (serviços server-to-server, curl, healthchecks)
       if (!origin) return cb(null, true);
+
+      // Em desenvolvimento, permite dinamicamente qualquer porta em localhost ou 127.0.0.1
+      if (isDevelopment) {
+        if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+          return cb(null, true);
+        }
+      }
+
+      // Em produção, valida estritamente contra as origens configuradas em variáveis de ambiente
       const normalizedOrigin = origin.replace(/\/$/, "");
-      if (allowedOrigins.includes(normalizedOrigin)) {
+      if (envOrigins.includes(normalizedOrigin)) {
         return cb(null, true);
       }
-      return cb(new Error("CORS: Origem não permitida pela política de segurança."), false);
+
+      // Retorna falso de forma limpa em vez de lançar exceção não tratada
+      return cb(null, false);
     },
     credentials: true,
     allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization", "X-Admin-Key"],
