@@ -112,6 +112,7 @@ export function VideoPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(false);
 
   // Estados de UMSA & Modal de Seleção de Fontes
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
@@ -283,12 +284,27 @@ export function VideoPlayer({
 
         player.configure({
           streaming: {
-            rebufferingGoal: 2,
-            bufferingGoal: 10,
+            rebufferingGoal: 2, // Segundos necessários antes de retomar a reprodução após starving
+            bufferingGoal: 30, // Janela inteligente de buffer ahead de 30s (Padrão Netflix) para absorver oscilações
+            bufferBehind: 15, // Buffer de 15s retido atrás para retrocessos curtos sem re-download
+            segmentPrefetchLimit: 2, // Pré-busca concorrente de segmentos à frente
+            stallEnabled: true,
+            stallThreshold: 1,
           },
           abr: {
             enabled: true,
+            defaultBandwidthEstimate: 2000000,
+            switchInterval: 8,
           },
+        });
+
+        // Escuta eventos de buffering do Shaka Player (MSE)
+        player.addEventListener("buffering", (event: any) => {
+          if (!videoRef.current?.paused) {
+            setIsBuffering(Boolean(event.buffering));
+          } else {
+            setIsBuffering(false);
+          }
         });
 
         player.addEventListener("error", (event: any) => {
@@ -561,11 +577,41 @@ export function VideoPlayer({
 
     const handlePause = () => {
       setIsPlaying(false);
+      setIsBuffering(false);
+      setIsLoading(false);
       onPause?.();
     };
 
-    const handleWaiting = () => setIsLoading(true);
-    const handlePlaying = () => setIsLoading(false);
+    const handleWaiting = () => {
+      // Se o vídeo estiver pausado, o evento waiting nunca deve ativar o spinner de buffering
+      if (!video.paused) {
+        setIsBuffering(true);
+      }
+    };
+
+    const handlePlaying = () => {
+      setIsBuffering(false);
+      setIsLoading(false);
+    };
+
+    const handleCanPlay = () => {
+      setIsBuffering(false);
+      setIsLoading(false);
+    };
+
+    const handleSeeking = () => {
+      // Apenas marca buffering se o vídeo estiver em reprodução ativa
+      if (!video.paused) {
+        setIsBuffering(true);
+      }
+    };
+
+    const handleSeeked = () => {
+      setIsBuffering(false);
+      if (video.paused) {
+        setIsLoading(false);
+      }
+    };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -573,6 +619,9 @@ export function VideoPlayer({
     video.addEventListener("pause", handlePause);
     video.addEventListener("waiting", handleWaiting);
     video.addEventListener("playing", handlePlaying);
+    video.addEventListener("canplay", handleCanPlay);
+    video.addEventListener("seeking", handleSeeking);
+    video.addEventListener("seeked", handleSeeked);
 
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
@@ -581,6 +630,9 @@ export function VideoPlayer({
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("waiting", handleWaiting);
       video.removeEventListener("playing", handlePlaying);
+      video.removeEventListener("canplay", handleCanPlay);
+      video.removeEventListener("seeking", handleSeeking);
+      video.removeEventListener("seeked", handleSeeked);
     };
   }, [onPlay, onPause, onTimeUpdate]);
 
@@ -656,6 +708,8 @@ export function VideoPlayer({
         video.play().catch(() => {});
       }
     } else {
+      setIsBuffering(false);
+      setIsLoading(false);
       if (isWatchTogether) {
         sendPause(video.currentTime);
       } else {
@@ -756,6 +810,11 @@ export function VideoPlayer({
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  // Estado explícito de pausa: se o vídeo está deliberadamente pausado, o spinner central de loading é forçado a false
+  const isPaused = !isPlaying || (videoRef.current ? videoRef.current.paused : true);
+  const isInitialLoading = isLoading && duration === 0 && (!videoRef.current || videoRef.current.readyState < 2);
+  const showSpinner = isInitialLoading || (isBuffering && !isPaused);
+
   return (
     <div
       ref={playerContainerRef}
@@ -770,8 +829,8 @@ export function VideoPlayer({
         playsInline
       />
 
-      {/* Spinner de Buffering / Loading */}
-      {isLoading && (
+      {/* Spinner de Buffering / Loading (Estritamente desabilitado durante pausa) */}
+      {showSpinner && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
           <div className="w-14 h-14 border-4 border-white/20 border-t-[#e50914] rounded-full animate-spin" />
         </div>
