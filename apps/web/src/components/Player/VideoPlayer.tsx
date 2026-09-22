@@ -115,6 +115,7 @@ export function VideoPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
+  const [bufferedPercentage, setBufferedPercentage] = useState(0);
 
   // Estados de UMSA & Modal de Seleção de Fontes
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
@@ -413,6 +414,7 @@ export function VideoPlayer({
           setIsLoading(false);
           setDuration(0);
           setCurrentTime(0);
+          setBufferedPercentage(0);
         }
         return;
       }
@@ -625,13 +627,41 @@ export function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
+    const calculateBuffered = () => {
+      const video = videoRef.current;
+      if (!video || !video.duration || video.buffered.length === 0) {
+        setBufferedPercentage(0);
+        return;
+      }
+      const current = video.currentTime;
+      let end = 0;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= current && current <= video.buffered.end(i)) {
+          end = video.buffered.end(i);
+          break;
+        }
+      }
+      // Fallback se estiver no início e current ainda não entrou no range
+      if (end === 0 && video.buffered.length > 0) {
+        end = video.buffered.end(video.buffered.length - 1);
+      }
+      const pct = Math.min(100, Math.max(0, (end / video.duration) * 100));
+      setBufferedPercentage(pct);
+    };
+
     const handleTimeUpdate = () => {
       setCurrentTime(video.currentTime);
+      calculateBuffered();
       onTimeUpdate?.(video.currentTime);
     };
 
     const handleLoadedMetadata = () => {
       setDuration(video.duration || 0);
+      calculateBuffered();
+    };
+
+    const handleProgress = () => {
+      calculateBuffered();
     };
 
     const handlePlay = () => {
@@ -668,6 +698,7 @@ export function VideoPlayer({
       if (!video.paused) {
         setIsBuffering(true);
       }
+      calculateBuffered();
     };
 
     const handleSeeked = () => {
@@ -675,10 +706,12 @@ export function VideoPlayer({
       if (video.paused) {
         setIsLoading(false);
       }
+      calculateBuffered();
     };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("progress", handleProgress);
     video.addEventListener("play", handlePlay);
     video.addEventListener("pause", handlePause);
     video.addEventListener("waiting", handleWaiting);
@@ -690,6 +723,7 @@ export function VideoPlayer({
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("progress", handleProgress);
       video.removeEventListener("play", handlePlay);
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("waiting", handleWaiting);
@@ -1035,9 +1069,15 @@ export function VideoPlayer({
             isWatchTogether && !isHost ? "cursor-not-allowed opacity-90" : "cursor-pointer"
           }`}
         >
-          {/* Barra Preenchida */}
+          {/* Barra de Buffer (Estilo YouTube/Netflix) */}
           <div
-            className="h-full bg-[#e50914] rounded-full relative"
+            className="absolute left-0 top-0 h-full bg-white/40 rounded-full transition-all duration-200 pointer-events-none"
+            style={{ width: `${bufferedPercentage}%` }}
+          />
+
+          {/* Barra Preenchida / Progresso Atual (Played) */}
+          <div
+            className="h-full bg-[#e50914] rounded-full relative z-10 transition-all duration-75"
             style={{ width: `${progressPercent}%` }}
           >
             <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-[#e50914] rounded-full shadow scale-0 group-hover:scale-100 transition-transform" />
