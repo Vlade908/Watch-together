@@ -30,7 +30,9 @@ export { getApiBaseUrl };
 export const setTokenCookie = (token: string) => {
   if (typeof document !== "undefined") {
     // Cookie acessível pelo middleware Next.js
-    document.cookie = `watch_together_token=${encodeURIComponent(token)}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
+    const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
+    const secureFlag = isSecure ? "; Secure" : "";
+    document.cookie = `watch_together_token=${encodeURIComponent(token)}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax${secureFlag}`;
   }
 };
 

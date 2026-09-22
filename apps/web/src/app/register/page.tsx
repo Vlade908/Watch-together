@@ -21,10 +21,14 @@ function RegisterForm() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Se já estiver logado, redireciona
+  // Se já estiver logado, redireciona imediatamente
   React.useEffect(() => {
     if (isAuthenticated) {
-      router.push(targetRedirect);
+      router.replace(targetRedirect);
+      router.refresh();
+      if (typeof window !== "undefined") {
+        window.location.assign(targetRedirect);
+      }
     }
   }, [isAuthenticated, targetRedirect, router]);
 
@@ -48,6 +52,10 @@ function RegisterForm() {
 
     if (result.success) {
       router.push(targetRedirect);
+      router.refresh();
+      if (typeof window !== "undefined") {
+        window.location.assign(targetRedirect);
+      }
     } else {
       setError(result.error || "Falha ao criar conta");
     }
