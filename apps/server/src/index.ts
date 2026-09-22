@@ -1,3 +1,4 @@
+import os from "node:os";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -81,9 +82,24 @@ fastify.setErrorHandler((error: any, request, reply) => {
   });
 });
 
+// Mapeia IPs locais de rede da máquina para desenvolvimento
+function getLocalNetworkIps(): string[] {
+  const interfaces = os.networkInterfaces();
+  const ips: string[] = [];
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        ips.push(net.address);
+      }
+    }
+  }
+  return ips;
+}
+
 async function main() {
-  // VULN-02: Política Defensiva de CORS
+  // VULN-02: Política Defensiva de CORS com Suporte Dinâmico a LAN em Desenvolvimento
   const isDevelopment = process.env.NODE_ENV !== "production";
+  const localIps = getLocalNetworkIps();
   const envOrigins = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || "")
     .split(",")
     .map((s) => s.trim().replace(/\/$/, ""))
@@ -94,20 +110,31 @@ async function main() {
       // Permite requisições sem cabeçalho Origin (serviços server-to-server, curl, healthchecks)
       if (!origin) return cb(null, true);
 
-      // Em desenvolvimento, permite dinamicamente qualquer porta em localhost ou 127.0.0.1
       if (isDevelopment) {
+        // 1. Localhost / 127.0.0.1 em qualquer porta
         if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+          return cb(null, true);
+        }
+        // 2. IPs locais da própria máquina
+        const matchesLocalIp = localIps.some((ip) =>
+          new RegExp(`^http:\\/\\/${ip.replace(/\\./g, "\\.")}(:\\d+)?$`).test(origin)
+        );
+        if (matchesLocalIp) {
+          return cb(null, true);
+        }
+        // 3. Faixas de rede privada local RFC 1918 (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+        if (/^http:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin)) {
           return cb(null, true);
         }
       }
 
-      // Em produção, valida estritamente contra as origens configuradas em variáveis de ambiente
+      // Em produção, validação estrita contra as origens configuradas em variáveis de ambiente
       const normalizedOrigin = origin.replace(/\/$/, "");
       if (envOrigins.includes(normalizedOrigin)) {
         return cb(null, true);
       }
 
-      // Retorna falso de forma limpa em vez de lançar exceção não tratada
+      // Retorna falso de forma limpa sem disparar erro 500 no preflight
       return cb(null, false);
     },
     credentials: true,
