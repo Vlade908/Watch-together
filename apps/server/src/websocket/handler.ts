@@ -3,7 +3,7 @@ import { FastifyRequest } from "fastify";
 import { RoomService } from "../services/roomService";
 import { PubSubService } from "../services/pubsubService";
 import { PresenceService } from "../services/presenceService";
-import { ClientMessage, ServerMessage, RoomMember } from "../types";
+import { ClientMessage, ServerMessage, RoomMember, MediaSourceType } from "../types";
 
 export function handleRoomWebSocket(
   socket: WebSocket,
@@ -86,24 +86,54 @@ export function handleRoomWebSocket(
 
         // 2. Entrada do Usuário na Sala
         case "join_room": {
-          const isFirstMember = (await RoomService.getMembers(roomId)).length === 0;
           const memberUserId = authenticatedUser?.id || parsed.userId;
           const memberUserName = authenticatedUser?.name || parsed.userName;
+
+          const isLocalRoom =
+            parsed.initialSourceType === "LOCAL_FILE" ||
+            roomId.includes("local") ||
+            roomId.includes("arquivo-local");
+
+          const defaultMediaId = isLocalRoom ? "arquivo-local" : "interestelar-alem-do-horizonte";
+          const defaultSourceType: MediaSourceType = isLocalRoom ? "LOCAL_FILE" : "CATALOG_DEMO";
+          const defaultMediaTitle = isLocalRoom
+            ? parsed.mediaTitle || "Ficheiro Local (Syncplay)"
+            : undefined;
+
+          // 1. Obtém ou inicializa o estado da sala ANTES de adicionar membros
+          // Se a sala ainda não existir no Redis, este usuário autenticado torna-se o Host autoritativo e imutável
+          const state = await RoomService.getOrCreateRoomState(
+            roomId,
+            defaultMediaId,
+            memberUserId,
+            defaultSourceType,
+            defaultMediaTitle,
+            undefined,
+            memberUserName
+          );
+
+          // 2. Determina se este usuário é o Host comparando com o hostId autoritativo no Redis
+          const isThisUserTheHost = Boolean(
+            state.hostId &&
+            state.hostId !== "system" &&
+            state.hostId === memberUserId
+          );
+
           currentMember = {
             userId: memberUserId,
             userName: memberUserName,
-            isHost: parsed.isHost !== undefined ? parsed.isHost : isFirstMember,
+            isHost: isThisUserTheHost,
             joinedAt: Date.now(),
           };
 
+          // 3. Registra membro com a flag isHost estritamente alinhada ao estado da sala
           const members = await RoomService.addMember(roomId, currentMember);
-          const state = await RoomService.getOrCreateRoomState(
-            roomId,
-            "interestelar-alem-do-horizonte",
-            currentMember.isHost ? currentMember.userId : "system"
+
+          console.log(
+            `[WS /ws/rooms/${roomId}] [join_room] Usuário '${memberUserName}' (${memberUserId}) ingressou. Host da sala: '${state.hostId}' | É Host? ${isThisUserTheHost}`
           );
 
-          // Envia o estado atual autoritativo para o novo cliente
+          // 4. Envia o estado atual autoritativo para o novo cliente
           send({
             type: "room_state",
             state,
@@ -111,33 +141,57 @@ export function handleRoomWebSocket(
             members,
           });
 
-          // Notifica os demais membros via Redis Pub/Sub
+          // 5. Notifica os demais membros via Redis Pub/Sub
           await PubSubService.publishRoomEvent(roomId, {
             type: "member_joined",
             member: currentMember,
             membersCount: members.length,
           });
 
-          // Atualiza lista global de salas ativas no Redis
+          // 6. Atualiza lista global de salas ativas no Redis
+          const activeTitleName =
+            state.sourceType === "LOCAL_FILE"
+              ? state.mediaTitle || "Ficheiro Local (Syncplay)"
+              : state.mediaId === "interestelar-alem-do-horizonte"
+              ? "Interestelar: Além do Horizonte"
+              : state.mediaId;
+
+          const activeBannerUrl =
+            state.sourceType === "LOCAL_FILE"
+              ? "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=1200&auto=format&fit=crop"
+              : "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop";
+
           await PresenceService.registerActiveRoom({
             roomId,
             mediaId: state.mediaId,
-            titleName: state.mediaId === "interestelar-alem-do-horizonte" ? "Interestelar: Além do Horizonte" : state.mediaId,
-            bannerUrl: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
+            titleName: activeTitleName,
+            bannerUrl: activeBannerUrl,
             slug: state.mediaId,
-            hostName: currentMember.userName,
+            hostName: state.hostName || currentMember.userName,
             participantsCount: members.length,
             maxParticipants: 10,
             status: state.status,
             isPrivate: false,
-            syncQuality: "Ultra HD (Sub-50ms sync)",
+            syncQuality: state.sourceType === "LOCAL_FILE" ? "Original Local (0 buffer)" : "Ultra HD (Sub-50ms sync)",
           });
           break;
         }
 
-        // 3. Play Síncrono Autoritativo
+        // 3. Play Síncrono Autoritativo (Host Only)
         case "room_play": {
           if (!currentMember) return;
+          const state = await RoomService.getOrCreateRoomState(roomId);
+          const isHost = authenticatedUser?.id && authenticatedUser.id === state.hostId;
+          if (!isHost) {
+            console.warn(`[WS /ws/rooms/${roomId}] [FORBIDDEN] Convidado ${currentMember.userId} tentou disparar play.`);
+            send({
+              type: "error",
+              code: "FORBIDDEN",
+              message: "FORBIDDEN: Apenas o anfitrião (Host) tem permissão para controlar a reprodução da sala.",
+            });
+            break;
+          }
+
           const updatedState = await RoomService.updatePlaybackState(
             roomId,
             "PLAY",
@@ -154,9 +208,21 @@ export function handleRoomWebSocket(
           break;
         }
 
-        // 4. Pause Síncrono Autoritativo
+        // 4. Pause Síncrono Autoritativo (Host Only)
         case "room_pause": {
           if (!currentMember) return;
+          const state = await RoomService.getOrCreateRoomState(roomId);
+          const isHost = authenticatedUser?.id && authenticatedUser.id === state.hostId;
+          if (!isHost) {
+            console.warn(`[WS /ws/rooms/${roomId}] [FORBIDDEN] Convidado ${currentMember.userId} tentou disparar pause.`);
+            send({
+              type: "error",
+              code: "FORBIDDEN",
+              message: "FORBIDDEN: Apenas o anfitrião (Host) tem permissão para pausar a reprodução da sala.",
+            });
+            break;
+          }
+
           const updatedState = await RoomService.updatePlaybackState(
             roomId,
             "PAUSE",
@@ -173,9 +239,21 @@ export function handleRoomWebSocket(
           break;
         }
 
-        // 5. Seek Síncrono Autoritativo
+        // 5. Seek Síncrono Autoritativo (Host Only)
         case "room_seek": {
           if (!currentMember) return;
+          const state = await RoomService.getOrCreateRoomState(roomId);
+          const isHost = authenticatedUser?.id && authenticatedUser.id === state.hostId;
+          if (!isHost) {
+            console.warn(`[WS /ws/rooms/${roomId}] [FORBIDDEN] Convidado ${currentMember.userId} tentou disparar seek.`);
+            send({
+              type: "error",
+              code: "FORBIDDEN",
+              message: "FORBIDDEN: Apenas o anfitrião (Host) tem permissão para avançar ou retroceder a reprodução da sala.",
+            });
+            break;
+          }
+
           const updatedState = await RoomService.updatePlaybackState(
             roomId,
             "SEEK",
@@ -192,7 +270,71 @@ export function handleRoomWebSocket(
           break;
         }
 
-        // 6. Solicitação de Sync Manual ou Reconexão
+        // 6. Troca de Fonte de Mídia (UMSA / BYOM - Host Only)
+        case "set_media_source": {
+          if (!currentMember) return;
+          const state = await RoomService.getOrCreateRoomState(roomId);
+          const isHost = authenticatedUser?.id && authenticatedUser.id === state.hostId;
+          if (!isHost) {
+            console.warn(`[WS /ws/rooms/${roomId}] [FORBIDDEN] Convidado ${currentMember.userId} tentou alterar a fonte de mídia.`);
+            send({
+              type: "error",
+              code: "FORBIDDEN",
+              message: "FORBIDDEN: Apenas o anfitrião (Host) tem permissão para alterar a fonte de mídia da sala.",
+            });
+            break;
+          }
+
+          const updatedState = await RoomService.updateRoomMediaSource(
+            roomId,
+            parsed.sourceType,
+            parsed.contentFingerprint,
+            parsed.mediaTitle,
+            parsed.directUrl
+          );
+
+          await PubSubService.publishRoomEvent(roomId, {
+            type: "source_updated",
+            state: updatedState,
+            directUrl: parsed.directUrl,
+            triggeredBy: { userId: currentMember.userId, userName: currentMember.userName },
+          });
+
+          // Atualiza o título da sala no PresenceService para refletir na Central de Atividades e no Social
+          const members = await RoomService.getMembers(roomId);
+          const activeTitleName =
+            updatedState.mediaTitle ||
+            (updatedState.sourceType === "LOCAL_FILE"
+              ? "Ficheiro Local (Syncplay)"
+              : updatedState.mediaId === "interestelar-alem-do-horizonte"
+              ? "Interestelar: Além do Horizonte"
+              : updatedState.mediaId);
+
+          const activeBannerUrl =
+            updatedState.sourceType === "LOCAL_FILE"
+              ? "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=1200&auto=format&fit=crop"
+              : "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop";
+
+          await PresenceService.registerActiveRoom({
+            roomId,
+            mediaId: updatedState.mediaId,
+            titleName: activeTitleName,
+            bannerUrl: activeBannerUrl,
+            slug: updatedState.mediaId,
+            hostName: updatedState.hostName || currentMember.userName,
+            participantsCount: members.length,
+            maxParticipants: 10,
+            status: updatedState.status,
+            isPrivate: false,
+            syncQuality:
+              updatedState.sourceType === "LOCAL_FILE"
+                ? "Original Local (0 buffer)"
+                : "Ultra HD (Sub-50ms sync)",
+          });
+          break;
+        }
+
+        // 7. Solicitação de Sync Manual ou Reconexão
         case "sync_request": {
           const state = await RoomService.getOrCreateRoomState(roomId);
           const members = await RoomService.getMembers(roomId);
@@ -248,7 +390,7 @@ export function handleRoomWebSocket(
           titleName: state.mediaId === "interestelar-alem-do-horizonte" ? "Interestelar: Além do Horizonte" : state.mediaId,
           bannerUrl: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
           slug: state.mediaId,
-          hostName: remaining[0]?.userName || "Host",
+          hostName: state.hostName || remaining[0]?.userName || "Host",
           participantsCount: remaining.length,
           maxParticipants: 10,
           status: state.status,

@@ -1,4 +1,5 @@
 export type PlaybackStatus = "PLAYING" | "PAUSED";
+export type MediaSourceType = "LOCAL_FILE" | "DIRECT_URL" | "CATALOG_DEMO";
 
 export interface RoomState {
   roomId: string;
@@ -7,8 +8,13 @@ export interface RoomState {
   referenceMediaTime: number; // segundos no vídeo
   referenceWallTime: number;  // timestamp do servidor em milissegundos
   hostId: string;
+  hostName?: string;
   playbackSpeed: number;
   updatedAt: number;
+  sourceType?: MediaSourceType;
+  contentFingerprint?: string; // hash amostral SHA-256 opaco
+  mediaTitle?: string;
+  directUrl?: string; // URL direta efêmera no Redis para reprodução da sala
 }
 
 export interface RoomMember {
@@ -75,11 +81,26 @@ export interface RoomInvite {
 // Mensagens Cliente -> Servidor (Sala de Reprodução)
 export type ClientMessage =
   | { type: "sync_clock"; clientSendTime: number }
-  | { type: "join_room"; roomId: string; userId: string; userName: string; isHost?: boolean }
+  | {
+      type: "join_room";
+      roomId: string;
+      userId: string;
+      userName: string;
+      isHost?: boolean;
+      initialSourceType?: MediaSourceType;
+      mediaTitle?: string;
+    }
   | { type: "leave_room"; roomId: string; userId: string }
   | { type: "room_play"; mediaTime: number }
   | { type: "room_pause"; mediaTime: number }
   | { type: "room_seek"; mediaTime: number }
+  | {
+      type: "set_media_source";
+      sourceType: MediaSourceType;
+      contentFingerprint?: string;
+      mediaTitle?: string;
+      directUrl?: string;
+    }
   | { type: "sync_request" }
   | { type: "chat_message"; text: string; senderName: string };
 
@@ -104,6 +125,12 @@ export type ServerMessage =
       triggeredBy: { userId: string; userName: string };
     }
   | {
+      type: "source_updated";
+      state: RoomState;
+      directUrl?: string;
+      triggeredBy: { userId: string; userName: string };
+    }
+  | {
       type: "member_joined";
       member: RoomMember;
       membersCount: number;
@@ -123,6 +150,7 @@ export type ServerMessage =
     }
   | {
       type: "error";
+      code?: string;
       message: string;
     };
 

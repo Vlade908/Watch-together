@@ -13,10 +13,27 @@ import {
   RotateCcw,
   RotateCw,
   Users,
+  FileVideo,
+  Sparkles,
+  AlertTriangle,
+  X,
+  Popcorn,
+  Clock,
+  Lock,
 } from "lucide-react";
 import Link from "next/link";
 import { useWatchTogetherRoom } from "@/hooks/useWatchTogetherRoom";
+import { MediaSourceType } from "@/types/sync";
 import { SyncHUD } from "./SyncHUD";
+import { SourceSelectorModal } from "./SourceSelectorModal";
+import {
+  IMediaSourceDriver,
+  LocalFileDriver,
+  DirectUrlDriver,
+  CatalogDemoDriver,
+  isAdaptiveStreamUrl,
+} from "@/services/mediaDrivers";
+import { extractCleanMediaTitle } from "@/services/mediaFingerprint";
 
 interface VideoPlayerProps {
   manifestUrl: string;
@@ -26,6 +43,8 @@ interface VideoPlayerProps {
   roomId?: string;
   userId?: string;
   userName?: string;
+  initialSourceType?: MediaSourceType;
+  onMediaTitleChange?: (title: string) => void;
   onTimeUpdate?: (currentTime: number) => void;
   onPlay?: () => void;
   onPause?: () => void;
@@ -40,6 +59,8 @@ export function VideoPlayer({
   roomId = "sala-cinephiles-4k",
   userId,
   userName,
+  initialSourceType,
+  onMediaTitleChange,
   onTimeUpdate,
   onPlay,
   onPause,
@@ -57,6 +78,17 @@ export function VideoPlayer({
     driftZone,
     appliedSpeed,
     members,
+    isHost,
+    roomState,
+    sourceType,
+    contentFingerprint,
+    mediaTitle,
+    remoteDirectUrl,
+    localFingerprint,
+    localFile,
+    hashMatchStatus,
+    changeMediaSource,
+    registerLocalFile,
     sendPlay,
     sendPause,
     sendSeek,
@@ -66,6 +98,8 @@ export function VideoPlayer({
     userName,
     videoRef,
     enabled: isWatchTogether,
+    initialSourceType,
+    mediaTitle: titleName,
   });
 
   // Estados de Playback
@@ -76,6 +110,111 @@ export function VideoPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Estados de UMSA & Modal de Seleção de Fontes
+  const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const currentDriverRef = useRef<IMediaSourceDriver | null>(null);
+
+  const effectiveSourceType = sourceType || initialSourceType || "CATALOG_DEMO";
+
+  // Título e subtítulo dinâmicos da mídia em exibição
+  const displayTitle =
+    mediaTitle ||
+    (effectiveSourceType === "LOCAL_FILE" && localFile
+      ? extractCleanMediaTitle(localFile.name)
+      : titleName);
+
+  const displaySubtitle =
+    effectiveSourceType === "LOCAL_FILE"
+      ? "Ficheiro Local (Zero Buffer / Syncplay)"
+      : effectiveSourceType === "DIRECT_URL"
+      ? "Transmissão Remota via URL Direta"
+      : episodeName || "Catálogo de Demonstração (HLS ABR)";
+
+  // Notifica componente pai sobre o título ativo e sincroniza aba do navegador
+  useEffect(() => {
+    if (displayTitle) {
+      if (onMediaTitleChange) {
+        onMediaTitleChange(displayTitle);
+      }
+      if (typeof document !== "undefined") {
+        document.title = `${displayTitle} — Watch Together`;
+      }
+    }
+  }, [displayTitle, onMediaTitleChange]);
+
+  // Identificação do anfitrião e estado de espera para convidados
+  const hostMember = members.find((m) => m.isHost);
+  const hostDisplayName = hostMember?.userName || roomState?.hostName || "o Anfitrião";
+
+  // O Convidado está em espera caso a sala ainda não possua mídia definida pelo Host
+  const isWaitingForHostMedia =
+    isWatchTogether &&
+    !isHost &&
+    ((effectiveSourceType === "LOCAL_FILE" && !contentFingerprint) ||
+      (effectiveSourceType === "DIRECT_URL" && !remoteDirectUrl) ||
+      !roomState?.sourceType);
+
+  const handleShakaError = useCallback((error: any) => {
+    console.error("[VideoPlayer] Erro interceptado do Shaka Player:", error);
+    const category = error?.category;
+    const code = error?.code;
+    const msg = error?.message || (typeof error === "string" ? error : "");
+
+    if (
+      category === 1 ||
+      code === 1002 ||
+      code === 1003 ||
+      msg.toLowerCase().includes("cors") ||
+      msg.toLowerCase().includes("network") ||
+      msg.toLowerCase().includes("failed to fetch")
+    ) {
+      setPlaybackError(
+        "Bloqueio de CORS ou falha de rede ao carregar o manifesto HLS (.m3u8). O servidor de origem precisa fornecer o cabeçalho 'Access-Control-Allow-Origin: *'."
+      );
+    } else if (code === 1001) {
+      setPlaybackError("Protocolo ou formato de URL não suportado pelo player.");
+    } else {
+      setPlaybackError(`Erro no player (${code || "desconhecido"}): ${msg || "Falha ao decodificar stream."}`);
+    }
+  }, []);
+
+  // Controle de abertura do modal de seleção de arquivo local:
+  // Para o Host: abre imediatamente para que ele escolha o arquivo
+  // Para o Convidado: abre APENAS após o Host ter enviado o arquivo (contentFingerprint presente)
+  useEffect(() => {
+    if (!isWatchTogether) return;
+
+    if (isWaitingForHostMedia) {
+      setIsSourceModalOpen(false);
+      return;
+    }
+
+    if (effectiveSourceType === "LOCAL_FILE" && !localFile) {
+      if (isHost) {
+        setIsSourceModalOpen(true);
+      } else if (contentFingerprint) {
+        // Convidado só abre o seletor após o Host ter fornecido o fingerprint de referência
+        setIsSourceModalOpen(true);
+      }
+    }
+  }, [isWatchTogether, isHost, isWaitingForHostMedia, effectiveSourceType, localFile, contentFingerprint]);
+
+  // Se a fonte for DIRECT_URL ou CATALOG_DEMO, garante que o modal feche (especialmente para o convidado)
+  useEffect(() => {
+    if (isWatchTogether) {
+      if (effectiveSourceType === "DIRECT_URL" && remoteDirectUrl) {
+        setIsSourceModalOpen(false);
+      }
+      if (!isHost && effectiveSourceType !== "LOCAL_FILE") {
+        setIsSourceModalOpen(false);
+      }
+      if (isWaitingForHostMedia) {
+        setIsSourceModalOpen(false);
+      }
+    }
+  }, [isWatchTogether, isHost, isWaitingForHostMedia, effectiveSourceType, remoteDirectUrl]);
 
   // Controles & UI
   const [showControls, setShowControls] = useState(true);
@@ -89,18 +228,15 @@ export function VideoPlayer({
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. Inicializa o Shaka Player
+  // 1. Inicializa o Driver de Mídia Adequado (UMSA)
   useEffect(() => {
     let isMounted = true;
 
-    async function initShaka() {
-      if (!videoRef.current) return;
-
-      if (!manifestUrl || typeof manifestUrl !== "string" || !manifestUrl.trim()) {
-        console.warn("[VideoPlayer] Stream manifestUrl indefinida ou vazia, aguardando dados...");
-        setIsLoading(true);
-        return;
+    async function getOrInitShakaPlayer(): Promise<any> {
+      if (shakaPlayerRef.current) {
+        return shakaPlayerRef.current;
       }
+      if (!videoRef.current) return null;
 
       try {
         const shakaModule: any = await import("shaka-player/dist/shaka-player.compiled.js");
@@ -108,21 +244,14 @@ export function VideoPlayer({
         shaka.polyfill.installAll();
 
         if (!shaka.Player.isBrowserSupported()) {
-          console.error("Navegador não suporta Shaka Player!");
-          return;
-        }
-
-        // Destrói instância anterior caso exista
-        if (shakaPlayerRef.current) {
-          await shakaPlayerRef.current.destroy().catch(() => {});
-          shakaPlayerRef.current = null;
+          console.error("[VideoPlayer] Navegador não suporta Shaka Player!");
+          return null;
         }
 
         const player = new shaka.Player();
         await player.attach(videoRef.current);
         shakaPlayerRef.current = player;
 
-        // Configuração de ABR e resiliência de buffer
         player.configure({
           streaming: {
             rebufferingGoal: 2,
@@ -134,22 +263,165 @@ export function VideoPlayer({
         });
 
         player.addEventListener("error", (event: any) => {
-          console.error("Erro no Shaka Player:", event.detail);
+          handleShakaError(event.detail);
         });
 
-        // Carrega o manifesto HLS / DASH
-        await player.load(manifestUrl);
+        return player;
+      } catch (err) {
+        console.error("[VideoPlayer] Falha ao inicializar Shaka Player:", err);
+        return null;
+      }
+    }
+
+    async function setupSourceDriver() {
+      if (!videoRef.current) return;
+
+      // Limpa driver anterior caso exista
+      if (currentDriverRef.current) {
+        await currentDriverRef.current.detach().catch(() => {});
+        currentDriverRef.current = null;
+      }
+
+      // Caso 1: Modo Ficheiro Local (Syncplay Web)
+      if (isWatchTogether && effectiveSourceType === "LOCAL_FILE") {
+        setPlaybackError(null);
+        if (localFile) {
+          setIsLoading(true);
+          try {
+            const driver = new LocalFileDriver(localFile);
+            await driver.initialize();
+            await driver.attach(videoRef.current, shakaPlayerRef.current);
+            if (isMounted) {
+              currentDriverRef.current = driver;
+              setIsLoading(false);
+            }
+          } catch (err) {
+            console.error("[VideoPlayer] Falha ao carregar driver de arquivo local:", err);
+            if (isMounted) setIsLoading(false);
+          }
+        } else {
+          // Arquivo local pendente de seleção: NUNCA carrega Shaka ou Demo!
+          if (shakaPlayerRef.current) {
+            try {
+              await shakaPlayerRef.current.unload();
+            } catch {}
+          }
+          if (videoRef.current) {
+            videoRef.current.src = "";
+            videoRef.current.removeAttribute("src");
+            videoRef.current.load();
+          }
+          setIsLoading(false);
+          setDuration(0);
+          setCurrentTime(0);
+        }
+        return;
+      }
+
+      // Caso 2: Modo URL Direta / Nuvem Pessoal
+      if (isWatchTogether && effectiveSourceType === "DIRECT_URL") {
+        const targetUrl =
+          remoteDirectUrl ||
+          (manifestUrl && !manifestUrl.includes("stream.mux.com") ? manifestUrl : "");
+
+        if (targetUrl) {
+          setIsLoading(true);
+          setPlaybackError(null);
+          try {
+            const isAdaptive = isAdaptiveStreamUrl(targetUrl);
+            let shaka = shakaPlayerRef.current;
+            if (isAdaptive) {
+              shaka = await getOrInitShakaPlayer();
+            }
+
+            const driver = new DirectUrlDriver(targetUrl, mediaTitle);
+            await driver.attach(videoRef.current, shaka);
+
+            if (isMounted) {
+              currentDriverRef.current = driver;
+
+              // Se for HLS/DASH via Shaka Player, extrai faixas de resolução
+              if (shaka && isAdaptive) {
+                try {
+                  const tracks = shaka.getVariantTracks();
+                  const uniqueHeights = Array.from(
+                    new Set(tracks.map((t: any) => t.height).filter(Boolean))
+                  ) as number[];
+
+                  const resolutions = uniqueHeights
+                    .sort((b, a) => a - b)
+                    .map((height) => {
+                      const track = tracks.find((t: any) => t.height === height);
+                      return { id: track.id, height };
+                    });
+
+                  setAvailableResolutions(resolutions);
+                } catch {}
+              }
+
+              setIsLoading(false);
+            }
+          } catch (err: any) {
+            console.error("[VideoPlayer] Falha ao carregar driver de URL direta:", err);
+            if (isMounted) {
+              setIsLoading(false);
+              handleShakaError(err);
+            }
+          }
+        } else {
+          // Convidado aguardando o host fornecer a URL direta
+          if (shakaPlayerRef.current) {
+            try {
+              await shakaPlayerRef.current.unload();
+            } catch {}
+          }
+          if (videoRef.current) {
+            videoRef.current.src = "";
+            videoRef.current.removeAttribute("src");
+            videoRef.current.load();
+          }
+          setIsLoading(true);
+        }
+        return;
+      }
+
+      // Caso 3: Modo Catálogo Demo / HLS Padrão
+      const targetManifest = manifestUrl;
+      if (!targetManifest || typeof targetManifest !== "string" || !targetManifest.trim()) {
+        if (shakaPlayerRef.current) {
+          try {
+            await shakaPlayerRef.current.unload();
+          } catch {}
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      setPlaybackError(null);
+      try {
+        const player = await getOrInitShakaPlayer();
+        if (!player) {
+          setIsLoading(false);
+          return;
+        }
+
+        // Limpa src nativo para evitar conflito com MSE
+        if (videoRef.current) {
+          videoRef.current.removeAttribute("src");
+          videoRef.current.load();
+        }
+
+        await player.load(targetManifest);
 
         if (!isMounted) return;
 
-        // Lê faixas disponíveis para o seletor de resolução
         const tracks = player.getVariantTracks();
         const uniqueHeights = Array.from(
           new Set(tracks.map((t: any) => t.height).filter(Boolean))
         ) as number[];
-        
+
         const resolutions = uniqueHeights
-          .sort((a, b) => b - a)
+          .sort((b, a) => a - b)
           .map((height) => {
             const track = tracks.find((t: any) => t.height === height);
             return { id: track.id, height };
@@ -157,21 +429,33 @@ export function VideoPlayer({
 
         setAvailableResolutions(resolutions);
         setIsLoading(false);
-      } catch (err) {
-        console.error("Falha ao inicializar o player:", err);
-        setIsLoading(false);
+      } catch (err: any) {
+        console.error("Falha ao inicializar Shaka Player no Catálogo Demo:", err);
+        if (isMounted) {
+          setIsLoading(false);
+          handleShakaError(err);
+        }
       }
     }
 
-    initShaka();
+    setupSourceDriver();
 
     return () => {
       isMounted = false;
-      if (shakaPlayerRef.current) {
-        shakaPlayerRef.current.destroy();
+      if (currentDriverRef.current) {
+        currentDriverRef.current.detach().catch(() => {});
       }
     };
-  }, [manifestUrl]);
+  }, [
+    manifestUrl,
+    isWatchTogether,
+    sourceType,
+    effectiveSourceType,
+    localFile,
+    remoteDirectUrl,
+    mediaTitle,
+    handleShakaError,
+  ]);
 
   // 2. Event Listeners do Elemento <video>
   useEffect(() => {
@@ -278,6 +562,10 @@ export function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
+    if (isWatchTogether && !isHost) {
+      return;
+    }
+
     if (video.paused) {
       if (isWatchTogether) {
         sendPlay(video.currentTime);
@@ -296,6 +584,8 @@ export function VideoPlayer({
   const seekDelta = (seconds: number) => {
     const video = videoRef.current;
     if (!video) return;
+    if (isWatchTogether && !isHost) return;
+
     const target = Math.max(0, Math.min(video.currentTime + seconds, duration));
     if (isWatchTogether) {
       sendSeek(target);
@@ -308,6 +598,7 @@ export function VideoPlayer({
   const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const video = videoRef.current;
     if (!video || !duration) return;
+    if (isWatchTogether && !isHost) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
     const pos = (e.clientX - rect.left) / rect.width;
@@ -418,15 +709,13 @@ export function VideoPlayer({
           </Link>
           <div>
             <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-              {titleName}
+              {displayTitle}
             </h1>
-            {episodeName && (
-              <p className="text-xs text-[#9ba1b0]">{episodeName}</p>
-            )}
+            <p className="text-xs text-[#9ba1b0]">{displaySubtitle}</p>
           </div>
         </div>
 
-        {/* HUD Interativo de Sincronização Watch Together com Telemetria de Drift */}
+        {/* HUD Interativo de Sincronização Watch Together com Telemetria de Drift & UMSA */}
         {isWatchTogether && (
           <SyncHUD
             roomId={roomId}
@@ -436,9 +725,37 @@ export function VideoPlayer({
             driftZone={driftZone}
             appliedSpeed={appliedSpeed}
             members={members}
+            sourceType={sourceType}
+            hashMatchStatus={hashMatchStatus}
+            mediaTitle={displayTitle}
+            isHost={isHost}
+            onOpenSourceModal={() => setIsSourceModalOpen(true)}
           />
         )}
       </div>
+
+      {/* Banner de Erro de Reprodução / CORS */}
+      {playbackError && (
+        <div className="absolute top-24 left-1/2 -translate-x-1/2 z-40 max-w-xl w-[92%] animate-in fade-in slide-in-from-top-4 duration-300 pointer-events-auto">
+          <div className="bg-[#181112]/95 border border-red-500/40 rounded-2xl p-4 shadow-2xl backdrop-blur-md flex items-start space-x-3.5 text-red-200">
+            <div className="p-2 rounded-xl bg-red-500/20 text-red-400 flex-none mt-0.5">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="space-y-1 flex-1 text-xs">
+              <div className="flex items-center justify-between">
+                <p className="font-bold text-white text-sm">Falha no Carregamento da Mídia</p>
+                <button
+                  onClick={() => setPlaybackError(null)}
+                  className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-neutral-300 leading-relaxed">{playbackError}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Controles de Playback Inferiores */}
       <div
@@ -454,7 +771,10 @@ export function VideoPlayer({
             setHoverPosition(null);
             setHoverTime(null);
           }}
-          className="relative w-full h-1.5 hover:h-2.5 bg-white/20 rounded-full cursor-pointer transition-all flex items-center"
+          title={isWatchTogether && !isHost ? "A reprodução é controlada pelo Anfitrião" : undefined}
+          className={`relative w-full h-1.5 hover:h-2.5 bg-white/20 rounded-full transition-all flex items-center ${
+            isWatchTogether && !isHost ? "cursor-not-allowed opacity-90" : "cursor-pointer"
+          }`}
         >
           {/* Barra Preenchida */}
           <div
@@ -481,10 +801,24 @@ export function VideoPlayer({
           <div className="flex items-center space-x-4">
             <button
               onClick={togglePlay}
+              disabled={isWatchTogether && !isHost}
               aria-label={isPlaying ? "Pausar" : "Reproduzir"}
-              className="text-white hover:text-[#e50914] transition-colors"
+              title={
+                isWatchTogether && !isHost
+                  ? "Reprodução controlada pelo Anfitrião"
+                  : isPlaying
+                  ? "Pausar"
+                  : "Reproduzir"
+              }
+              className={`transition-colors flex items-center gap-1.5 ${
+                isWatchTogether && !isHost
+                  ? "text-neutral-400 cursor-not-allowed"
+                  : "text-white hover:text-[#e50914]"
+              }`}
             >
-              {isPlaying ? (
+              {isWatchTogether && !isHost ? (
+                <Lock className="w-4 h-4 text-neutral-400" />
+              ) : isPlaying ? (
                 <Pause className="w-6 h-6 fill-current" />
               ) : (
                 <Play className="w-6 h-6 fill-current" />
@@ -493,16 +827,26 @@ export function VideoPlayer({
 
             <button
               onClick={() => seekDelta(-10)}
-              title="Voltar 10s (J)"
-              className="text-white hover:text-neutral-300 transition-colors"
+              disabled={isWatchTogether && !isHost}
+              title={isWatchTogether && !isHost ? "Controlado pelo Anfitrião" : "Voltar 10s (J)"}
+              className={`transition-colors ${
+                isWatchTogether && !isHost
+                  ? "text-neutral-500 cursor-not-allowed"
+                  : "text-white hover:text-neutral-300"
+              }`}
             >
               <RotateCcw className="w-5 h-5" />
             </button>
 
             <button
               onClick={() => seekDelta(10)}
-              title="Avançar 10s (L)"
-              className="text-white hover:text-neutral-300 transition-colors"
+              disabled={isWatchTogether && !isHost}
+              title={isWatchTogether && !isHost ? "Controlado pelo Anfitrião" : "Avançar 10s (L)"}
+              className={`transition-colors ${
+                isWatchTogether && !isHost
+                  ? "text-neutral-500 cursor-not-allowed"
+                  : "text-white hover:text-neutral-300"
+              }`}
             >
               <RotateCw className="w-5 h-5" />
             </button>
@@ -578,7 +922,7 @@ export function VideoPlayer({
             <button
               onClick={toggleFullscreen}
               aria-label={isFullscreen ? "Sair da tela cheia (F)" : "Tela cheia (F)"}
-              className="text-white hover:text-neutral-300 transition-colors"
+              className="text-white hover:text-neutral-300 transition-colors cursor-pointer"
             >
               {isFullscreen ? (
                 <Minimize className="w-5 h-5" />
@@ -589,6 +933,105 @@ export function VideoPlayer({
           </div>
         </div>
       </div>
+
+      {/* Overlay de Sala em Espera para Convidados */}
+      {isWaitingForHostMedia && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-6 animate-in fade-in duration-300 pointer-events-auto">
+          <div className="max-w-md w-full bg-[#141414] border border-white/10 rounded-3xl p-8 text-center space-y-6 shadow-2xl relative overflow-hidden">
+            {/* Glow decorativo de fundo */}
+            <div className="absolute -top-20 -left-20 w-40 h-40 bg-[#E50914]/20 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-20 -right-20 w-40 h-40 bg-[#E50914]/15 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="relative">
+              <div className="w-18 h-18 mx-auto rounded-2xl bg-gradient-to-tr from-[#E50914]/20 to-[#E50914]/10 border border-[#E50914]/30 flex items-center justify-center shadow-lg shadow-[#E50914]/20">
+                <Popcorn className="w-9 h-9 text-[#E50914] animate-bounce" />
+              </div>
+            </div>
+
+            <div className="space-y-2 relative">
+              <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-[#E50914]/15 border border-[#E50914]/30 text-[#ff4d58] text-[11px] font-bold uppercase tracking-wider">
+                <span className="w-2 h-2 rounded-full bg-[#E50914] animate-ping" />
+                <span>Sala em Espera</span>
+              </span>
+
+              <h3 className="text-lg font-bold text-white tracking-tight pt-1">
+                Aguardando o anfitrião ({hostDisplayName}) iniciar a transmissão...
+              </h3>
+              <p className="text-xs text-neutral-400 leading-relaxed max-w-sm mx-auto">
+                Relaxe e prepare a pipoca! Assim que <strong className="text-white">{hostDisplayName}</strong> escolher o conteúdo, a sua tela será sincronizada automaticamente.
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center justify-center space-x-2 text-neutral-500 text-xs">
+              <Clock className="w-4 h-4 animate-spin" />
+              <span>Sincronia Cristian&apos;s Algorithm em standby</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Overlay para Modo Ficheiro Local quando o arquivo não está carregado */}
+      {isWatchTogether && !isWaitingForHostMedia && effectiveSourceType === "LOCAL_FILE" && !localFile && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6 animate-in fade-in">
+          <div className="max-w-md w-full bg-[#161616] border border-white/15 rounded-2xl p-6 text-center space-y-4 shadow-2xl">
+            <div className="w-14 h-14 mx-auto rounded-full bg-[#E50914]/20 text-[#E50914] flex items-center justify-center">
+              <FileVideo className="w-7 h-7" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-white tracking-tight">
+                Sessão em Modo Ficheiro Local (Syncplay)
+              </h3>
+              <p className="text-xs text-neutral-300 leading-relaxed">
+                {isHost
+                  ? "Selecione o arquivo de vídeo (.mp4, .webm) no seu computador para iniciar a reprodução da sala com fidelidade nativa e zero tráfego no servidor."
+                  : `O anfitrião está assistindo "${mediaTitle || "um arquivo local"}". Selecione o seu arquivo correspondente para sincronizar a reprodução.`}
+              </p>
+            </div>
+            <button
+              onClick={() => setIsSourceModalOpen(true)}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#B20710] to-[#E50914] hover:from-[#c20812] hover:to-[#ff2b36] text-white font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-[#E50914]/30 flex items-center justify-center space-x-2 cursor-pointer"
+            >
+              <FileVideo className="w-4 h-4" />
+              <span>{isHost ? "Selecionar Meu Arquivo Local" : "Carregar Meu Arquivo Local"}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Seleção de Fonte de Mídia (UMSA / BYOM) */}
+      <SourceSelectorModal
+        isOpen={isSourceModalOpen && !isWaitingForHostMedia}
+        onClose={() => setIsSourceModalOpen(false)}
+        isHost={isHost}
+        currentSourceType={sourceType}
+        expectedFingerprint={contentFingerprint}
+        remoteDirectUrl={remoteDirectUrl || undefined}
+        currentMediaTitle={displayTitle}
+        onSelectLocalFile={(file, fingerprint, customTitle) => {
+          registerLocalFile(file, fingerprint);
+          if (isHost) {
+            changeMediaSource("LOCAL_FILE", {
+              contentFingerprint: fingerprint,
+              mediaTitle: customTitle || extractCleanMediaTitle(file.name),
+            });
+          }
+        }}
+        onSelectDirectUrl={(url, title) => {
+          if (isHost) {
+            changeMediaSource("DIRECT_URL", {
+              directUrl: url,
+              mediaTitle: title || extractCleanMediaTitle(url),
+            });
+          }
+        }}
+        onSelectCatalogDemo={() => {
+          if (isHost) {
+            changeMediaSource("CATALOG_DEMO", {
+              mediaTitle: titleName,
+            });
+          }
+        }}
+      />
     </div>
   );
 }

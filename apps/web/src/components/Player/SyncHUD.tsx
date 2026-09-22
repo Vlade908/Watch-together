@@ -1,8 +1,22 @@
 "use client";
 
 import React, { useState } from "react";
-import { Users, Wifi, WifiOff, Copy, Check, RefreshCw, ShieldCheck, Crown } from "lucide-react";
-import { RoomMember } from "../../types/sync";
+import {
+  Users,
+  Wifi,
+  WifiOff,
+  Copy,
+  Check,
+  RefreshCw,
+  ShieldCheck,
+  Crown,
+  FileVideo,
+  Globe,
+  Film,
+  AlertTriangle,
+  Settings2,
+} from "lucide-react";
+import { RoomMember, MediaSourceType } from "../../types/sync";
 
 interface SyncHUDProps {
   roomId: string;
@@ -12,6 +26,11 @@ interface SyncHUDProps {
   driftZone: 1 | 2 | 3;
   appliedSpeed: number;
   members: RoomMember[];
+  sourceType?: MediaSourceType;
+  hashMatchStatus?: "MATCH" | "MISMATCH" | "PENDING" | "NOT_APPLICABLE";
+  mediaTitle?: string;
+  isHost?: boolean;
+  onOpenSourceModal?: () => void;
   onManualSync?: () => void;
 }
 
@@ -23,6 +42,11 @@ export function SyncHUD({
   driftZone,
   appliedSpeed,
   members,
+  sourceType = "CATALOG_DEMO",
+  hashMatchStatus = "NOT_APPLICABLE",
+  mediaTitle,
+  isHost = false,
+  onOpenSourceModal,
   onManualSync,
 }: SyncHUDProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -102,6 +126,33 @@ export function SyncHUD({
           {status.text}
         </span>
 
+        {/* Ícone Indicador da Fonte de Mídia */}
+        <div className="flex items-center space-x-1 pl-1 pr-0.5 border-l border-white/20 text-neutral-400">
+          {sourceType === "LOCAL_FILE" ? (
+            hashMatchStatus === "MATCH" ? (
+              <span title="Syncplay: Hash Amostral Idêntico">
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+              </span>
+            ) : hashMatchStatus === "MISMATCH" ? (
+              <span title="Syncplay: Discrepância de Hash">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+              </span>
+            ) : (
+              <span title="Syncplay: Arquivo Pendente">
+                <FileVideo className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+              </span>
+            )
+          ) : sourceType === "DIRECT_URL" ? (
+            <span title="URL Direta / Nuvem Pessoal">
+              <Globe className="w-3.5 h-3.5 text-sky-400" />
+            </span>
+          ) : (
+            <span title="Catálogo Demo HLS">
+              <Film className="w-3.5 h-3.5 text-neutral-400" />
+            </span>
+          )}
+        </div>
+
         {/* Avatares Empilhados dos Membros da Sala com destaque dourado para o Host */}
         <div className="flex items-center -space-x-1.5 pl-1.5 border-l border-white/20">
           {sortedMembers.slice(0, 3).map((member, idx) => (
@@ -136,6 +187,78 @@ export function SyncHUD({
             <span className="text-[10px] uppercase font-bold text-neutral-400 bg-white/10 px-2 py-0.5 rounded">
               Sub-50ms Sync
             </span>
+          </div>
+
+          {/* Cartão da Fonte de Mídia (UMSA / BYOM) */}
+          <div className="p-2.5 rounded-lg bg-black/50 border border-white/10 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-neutral-400 font-medium text-[11px]">Fonte de Reprodução:</span>
+              <span className="text-white font-bold text-[11px] flex items-center space-x-1">
+                {sourceType === "LOCAL_FILE" ? (
+                  <>
+                    <FileVideo className="w-3 h-3 text-emerald-400" />
+                    <span>Ficheiro Local (BYOM)</span>
+                  </>
+                ) : sourceType === "DIRECT_URL" ? (
+                  <>
+                    <Globe className="w-3 h-3 text-sky-400" />
+                    <span>URL Direta</span>
+                  </>
+                ) : (
+                  <>
+                    <Film className="w-3 h-3 text-neutral-400" />
+                    <span>Catálogo Demo</span>
+                  </>
+                )}
+              </span>
+            </div>
+
+            {mediaTitle && (
+              <p className="text-neutral-200 text-xs font-semibold truncate">
+                {mediaTitle}
+              </p>
+            )}
+
+            {/* Status do Hash Matching em Arquivo Local */}
+            {sourceType === "LOCAL_FILE" && (
+              <div className="pt-1">
+                {hashMatchStatus === "MATCH" && (
+                  <div className="flex items-center space-x-1 text-emerald-400 text-[10px] font-semibold">
+                    <Check className="w-3 h-3" />
+                    <span>Hash Amostral Idêntico (Fidelidade 100%)</span>
+                  </div>
+                )}
+                {hashMatchStatus === "MISMATCH" && (
+                  <div className="flex items-center space-x-1 text-amber-400 text-[10px] font-semibold">
+                    <AlertTriangle className="w-3 h-3" />
+                    <span>Aviso: Hash diferente (versão distinta do Host)</span>
+                  </div>
+                )}
+                {hashMatchStatus === "PENDING" && (
+                  <div className="flex items-center space-x-1 text-amber-300 text-[10px] font-semibold">
+                    <AlertTriangle className="w-3 h-3 animate-pulse" />
+                    <span>Ficheiro local pendente de seleção</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Botão de Troca / Seleção de Fonte */}
+            {onOpenSourceModal && (isHost || sourceType === "LOCAL_FILE") && (
+              <button
+                onClick={onOpenSourceModal}
+                className="w-full mt-1.5 py-1.5 px-2.5 rounded bg-white/10 hover:bg-white/20 text-white font-medium text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer"
+              >
+                <Settings2 className="w-3 h-3" />
+                <span>
+                  {isHost
+                    ? "Configurar Fonte de Mídia"
+                    : hashMatchStatus === "PENDING"
+                    ? "Carregar Meu Ficheiro Local"
+                    : "Substituir Meu Ficheiro"}
+                </span>
+              </button>
+            )}
           </div>
 
           {/* Status de Sincronização */}

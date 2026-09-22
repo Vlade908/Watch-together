@@ -19,11 +19,14 @@ import {
   Loader2,
   Clock,
   ShieldCheck,
+  FileVideo,
+  Film,
 } from "lucide-react";
 import { CATALOG_DATA, CatalogTitle } from "@/data/mockCatalog";
 import { useSocial } from "@/context/SocialContext";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth, getApiBaseUrl } from "@/context/AuthContext";
 import { FriendUser } from "@/types/social";
+import { useRouter } from "next/navigation";
 
 interface SocialDrawerProps {
   isOpen: boolean;
@@ -49,13 +52,16 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     currentParty,
   } = useSocial();
 
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, getAuthHeaders } = useAuth();
+  const router = useRouter();
 
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<"friends" | "rooms" | "create">(defaultTab);
   const [friendSubTab, setFriendSubTab] = useState<"online" | "requests" | "search">("online");
+  const [isLaunchingRoom, setIsLaunchingRoom] = useState(false);
 
   const [selectedMovieForRoom, setSelectedMovieForRoom] = useState<CatalogTitle>(CATALOG_DATA[0]);
+  const [createSourceMode, setCreateSourceMode] = useState<"catalog" | "local">("catalog");
   const [roomType, setRoomType] = useState<"friends" | "public">("friends");
   const [hostOnlyControls, setHostOnlyControls] = useState(true);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -174,6 +180,40 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
   };
 
   const newGeneratedRoomCode = `sala-${selectedMovieForRoom.slug}-${Math.random().toString(36).substring(2, 6)}`;
+
+  const handleLaunchRoom = async (
+    targetRoomId: string,
+    targetSlug: string,
+    sourceType: "LOCAL_FILE" | "CATALOG_DEMO",
+    mediaTitle?: string,
+    extraQuery?: string
+  ) => {
+    setIsLaunchingRoom(true);
+    try {
+      const apiBase = getApiBaseUrl();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(),
+      };
+      await fetch(`${apiBase}/api/rooms`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          roomId: targetRoomId,
+          mediaId: targetSlug,
+          sourceType,
+          mediaTitle: mediaTitle || (sourceType === "LOCAL_FILE" ? "Ficheiro Local (Syncplay)" : undefined),
+        }),
+      });
+    } catch (e) {
+      console.warn("[SocialDrawer] Não foi possível pré-registrar a sala via API:", e);
+    } finally {
+      setIsLaunchingRoom(false);
+      onClose();
+      const query = extraQuery ? `&${extraQuery}` : "";
+      router.push(`/watch/${targetSlug}?mode=room&room=${targetRoomId}${query}`);
+    }
+  };
 
   return (
     <div className="select-none">
@@ -622,41 +662,114 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                 </p>
               </div>
 
-              {/* Seleção do Filme */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
-                  Selecionar Título do Catálogo
+              {/* Seletor de Modalidade de Conteúdo (UMSA) */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider block">
+                  Modalidade da Sala (BYOM)
                 </label>
-                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin scrollbar-thumb-neutral-700">
-                  {CATALOG_DATA.map((movie) => (
-                    <div
-                      key={movie.id}
-                      onClick={() => setSelectedMovieForRoom(movie)}
-                      className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center space-x-2 ${
-                        selectedMovieForRoom.id === movie.id
-                          ? "bg-[#E50914]/20 border-[#E50914] text-white"
-                          : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
-                      }`}
-                    >
-                      <div
-                        className="w-10 h-8 rounded bg-cover bg-center flex-none"
-                        style={{ backgroundImage: `url('${movie.bannerUrl}')` }}
-                      />
-                      <span className="text-xs font-medium truncate">{movie.name}</span>
-                    </div>
-                  ))}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setCreateSourceMode("catalog")}
+                    className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
+                      createSourceMode === "catalog"
+                        ? "bg-[#E50914] border-[#E50914] text-white shadow-md shadow-[#E50914]/20"
+                        : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
+                    }`}
+                  >
+                    <Film className="w-3.5 h-3.5" />
+                    <span>Catálogo Demo</span>
+                  </button>
+                  <button
+                    onClick={() => setCreateSourceMode("local")}
+                    className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
+                      createSourceMode === "local"
+                        ? "bg-[#E50914] border-[#E50914] text-white shadow-md shadow-[#E50914]/20"
+                        : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
+                    }`}
+                  >
+                    <FileVideo className="w-3.5 h-3.5" />
+                    <span>Ficheiro Local</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Botão de Criação */}
-              <Link
-                href={`/watch/${selectedMovieForRoom.slug}?mode=room&room=${newGeneratedRoomCode}`}
-                onClick={onClose}
-                className="w-full py-3.5 px-4 bg-gradient-to-r from-[#B20710] to-[#E50914] hover:from-[#c20812] hover:to-[#ff2b36] text-white font-bold rounded-xl shadow-lg shadow-[#E50914]/30 transition-all flex items-center justify-center space-x-2 text-xs uppercase tracking-wider cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Iniciar Sala Agora</span>
-              </Link>
+              {/* Modo 1: Catálogo */}
+              {createSourceMode === "catalog" && (
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
+                    Selecionar Título do Catálogo
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin scrollbar-thumb-neutral-700">
+                    {CATALOG_DATA.map((movie) => (
+                      <div
+                        key={movie.id}
+                        onClick={() => setSelectedMovieForRoom(movie)}
+                        className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center space-x-2 ${
+                          selectedMovieForRoom.id === movie.id
+                            ? "bg-[#E50914]/20 border-[#E50914] text-white"
+                            : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
+                        }`}
+                      >
+                        <div
+                          className="w-10 h-8 rounded bg-cover bg-center flex-none"
+                          style={{ backgroundImage: `url('${movie.bannerUrl}')` }}
+                        />
+                        <span className="text-xs font-medium truncate">{movie.name}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() =>
+                      handleLaunchRoom(
+                        newGeneratedRoomCode,
+                        selectedMovieForRoom.slug,
+                        "CATALOG_DEMO",
+                        selectedMovieForRoom.name
+                      )
+                    }
+                    disabled={isLaunchingRoom}
+                    className="w-full mt-2 py-3.5 px-4 bg-gradient-to-r from-[#B20710] to-[#E50914] hover:from-[#c20812] hover:to-[#ff2b36] text-white font-bold rounded-xl shadow-lg shadow-[#E50914]/30 transition-all flex items-center justify-center space-x-2 text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>{isLaunchingRoom ? "Criando Sala..." : "Iniciar Sala com Catálogo"}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Modo 2: Ficheiro Local (Syncplay Web) */}
+              {createSourceMode === "local" && (
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs space-y-1">
+                    <p className="font-bold flex items-center space-x-1.5 text-white">
+                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                      <span>Risco Zero & Privacidade Total</span>
+                    </p>
+                    <p className="text-[11px] text-neutral-300 leading-relaxed">
+                      Você e seus amigos reproduzirão o vídeo diretamente de seus computadores locais. A sala
+                      apenas compara o hash amostral criptográfico e sincroniza os tempos milimetricamente.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      const localCode = `sala-local-${Math.random().toString(36).substring(2, 6)}`;
+                      handleLaunchRoom(
+                        localCode,
+                        "arquivo-local",
+                        "LOCAL_FILE",
+                        "Ficheiro Local (Syncplay)",
+                        "source=local"
+                      );
+                    }}
+                    disabled={isLaunchingRoom}
+                    className="w-full py-3.5 px-4 bg-gradient-to-r from-[#00d26a] to-[#00b057] hover:from-[#00b057] hover:to-[#009147] text-black font-bold rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center space-x-2 text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50"
+                  >
+                    <FileVideo className="w-4 h-4" />
+                    <span>{isLaunchingRoom ? "Criando Sala..." : "Iniciar Sala (Ficheiro Local)"}</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

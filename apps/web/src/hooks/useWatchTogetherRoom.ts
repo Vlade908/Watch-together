@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { RoomState, RoomMember, ServerMessage, ClientMessage } from "../types/sync";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { RoomState, RoomMember, ServerMessage, ClientMessage, MediaSourceType } from "../types/sync";
 import { ClockSyncEngine, DriftController, DriftEvaluationResult } from "../services/syncEngine";
+import { useAuth } from "@/context/AuthContext";
 
 interface UseWatchTogetherRoomOptions {
   roomId: string;
@@ -10,6 +11,8 @@ interface UseWatchTogetherRoomOptions {
   userName?: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   enabled?: boolean;
+  initialSourceType?: MediaSourceType;
+  mediaTitle?: string;
 }
 
 export function useWatchTogetherRoom({
@@ -18,12 +21,50 @@ export function useWatchTogetherRoom({
   userName = "Você",
   videoRef,
   enabled = true,
+  initialSourceType,
+  mediaTitle,
 }: UseWatchTogetherRoomOptions) {
-  // Garante que userId e userName sejam estáticos durante a sessão para evitar re-render loops
-  const [stableUserId] = useState<string>(
-    () => userId || `user-${Math.random().toString(36).substring(2, 8)}`
-  );
-  const [stableUserName] = useState<string>(() => userName || "Você");
+  const { user: authUser } = useAuth();
+
+  const computedInitialSourceType: MediaSourceType = useMemo(() => {
+    if (initialSourceType) return initialSourceType;
+    if (roomId.includes("local") || roomId.includes("arquivo-local")) return "LOCAL_FILE";
+    return "CATALOG_DEMO";
+  }, [initialSourceType, roomId]);
+
+  // Fallback estável apenas se o usuário não possuir ID autenticado
+  const [stableFallbackUserId] = useState<string>(() => `user-${Math.random().toString(36).substring(2, 8)}`);
+
+  // Identidade reativa vinculada ao AuthContext (garante sincronismo com sub do JWT)
+  const currentUserId = useMemo(() => {
+    if (authUser?.id) return authUser.id;
+    if (userId) return userId;
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("watch_together_user");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.id) return parsed.id;
+        }
+      } catch {}
+    }
+    return stableFallbackUserId;
+  }, [authUser?.id, userId, stableFallbackUserId]);
+
+  const currentUserName = useMemo(() => {
+    if (authUser?.name) return authUser.name;
+    if (userName && userName !== "Você") return userName;
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("watch_together_user");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.name) return parsed.name;
+        }
+      } catch {}
+    }
+    return userName || "Você";
+  }, [authUser?.name, userName]);
 
   const [isConnected, setIsConnected] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
@@ -35,6 +76,11 @@ export function useWatchTogetherRoom({
   const [chatMessages, setChatMessages] = useState<
     Array<{ id: string; text: string; senderName: string; timestamp: number }>
   >([]);
+
+  // Estados UMSA (Fase 1 - Multi-Fonte & BYOM)
+  const [localFingerprint, setLocalFingerprint] = useState<string | null>(null);
+  const [localFile, setLocalFile] = useState<File | null>(null);
+  const [remoteDirectUrl, setRemoteDirectUrl] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const clockSyncRef = useRef<ClockSyncEngine>(new ClockSyncEngine());
@@ -100,13 +146,15 @@ export function useWatchTogetherRoom({
           // Dispara handshake inicial de sincronização de relógio
           ws.send(JSON.stringify({ type: "sync_clock", clientSendTime: Date.now() }));
 
-          // Entra na sala com credenciais estáveis do usuário
+          // Entra na sala com credenciais estáveis do usuário autenticado e modalidade inicial
           ws.send(
             JSON.stringify({
               type: "join_room",
               roomId,
-              userId: stableUserId,
-              userName: stableUserName,
+              userId: currentUserId,
+              userName: currentUserName,
+              initialSourceType: computedInitialSourceType,
+              mediaTitle,
             })
           );
         };
@@ -130,6 +178,9 @@ export function useWatchTogetherRoom({
               case "room_state": {
                 setRoomState(message.state);
                 setMembers(message.members);
+                if (message.state.directUrl) {
+                  setRemoteDirectUrl(message.state.directUrl);
+                }
 
                 // Alinha o vídeo local com o estado inicial
                 const authoritativeTime =
@@ -173,6 +224,15 @@ export function useWatchTogetherRoom({
                   setTimeout(() => {
                     isLocalActionRef.current = false;
                   }, 300);
+                }
+                break;
+              }
+
+              case "source_updated": {
+                setRoomState(message.state);
+                const newDirectUrl = message.directUrl || message.state.directUrl;
+                if (newDirectUrl) {
+                  setRemoteDirectUrl(newDirectUrl);
                 }
                 break;
               }
@@ -271,7 +331,7 @@ export function useWatchTogetherRoom({
         socketRef.current = null;
       }
     };
-  }, [roomId, stableUserId, stableUserName, enabled, resolveWsUrl, videoRef]);
+  }, [roomId, currentUserId, currentUserName, enabled, resolveWsUrl, videoRef]);
 
   // 1.1 Sincronização e alinhamento autoritativo quando o player de vídeo estiver pronto
   useEffect(() => {
@@ -332,9 +392,28 @@ export function useWatchTogetherRoom({
     return () => clearInterval(driftInterval);
   }, [enabled, isConnected, roomState, videoRef]);
 
-  // 3. Métodos públicos de disparo
+  // Verifica se o usuário atual é o Host da sala comparando com o hostId autoritativo no Redis
+  const isHost = useMemo(() => {
+    if (!roomState?.hostId || !currentUserId) return false;
+    return roomState.hostId === currentUserId;
+  }, [roomState?.hostId, currentUserId]);
+
+  // Logs contextuais no console para diagnóstico imediato no navegador
+  useEffect(() => {
+    if (roomState?.hostId && currentUserId) {
+      console.log(
+        `[Watch Together Room] Meu ID: ${currentUserId} | Host ID da Sala: ${roomState.hostId} | Sou Host? ${isHost}`
+      );
+    }
+  }, [roomState?.hostId, currentUserId, isHost]);
+
+  // 3. Métodos públicos de disparo com proteção de autoridade do Host
   const sendPlay = useCallback(
     (mediaTime?: number) => {
+      if (!isHost) {
+        console.warn("[Watch Together Room] Apenas o Host tem permissão para controlar a reprodução.");
+        return;
+      }
       if (!videoRef.current) return;
       const time = mediaTime !== undefined ? mediaTime : videoRef.current.currentTime;
       isLocalActionRef.current = true;
@@ -343,11 +422,15 @@ export function useWatchTogetherRoom({
         isLocalActionRef.current = false;
       }, 300);
     },
-    [send, videoRef]
+    [send, videoRef, isHost]
   );
 
   const sendPause = useCallback(
     (mediaTime?: number) => {
+      if (!isHost) {
+        console.warn("[Watch Together Room] Apenas o Host tem permissão para pausar a reprodução.");
+        return;
+      }
       if (!videoRef.current) return;
       const time = mediaTime !== undefined ? mediaTime : videoRef.current.currentTime;
       isLocalActionRef.current = true;
@@ -356,37 +439,90 @@ export function useWatchTogetherRoom({
         isLocalActionRef.current = false;
       }, 300);
     },
-    [send, videoRef]
+    [send, videoRef, isHost]
   );
 
   const sendSeek = useCallback(
     (targetTime: number) => {
+      if (!isHost) {
+        console.warn("[Watch Together Room] Apenas o Host tem permissão para avançar ou retroceder.");
+        return;
+      }
       isLocalActionRef.current = true;
       send({ type: "room_seek", mediaTime: targetTime });
       setTimeout(() => {
         isLocalActionRef.current = false;
       }, 300);
     },
-    [send]
+    [send, isHost]
   );
 
   const sendChatMessage = useCallback(
     (text: string) => {
       if (!text.trim()) return;
-      send({ type: "chat_message", text: text.trim(), senderName: stableUserName });
+      send({ type: "chat_message", text: text.trim(), senderName: currentUserName });
     },
-    [send, stableUserName]
+    [send, currentUserName]
   );
+
+  // Status de correspondência de hash do arquivo local (Syncplay Pattern)
+  const hashMatchStatus = useMemo((): "MATCH" | "MISMATCH" | "PENDING" | "NOT_APPLICABLE" => {
+    if (roomState?.sourceType !== "LOCAL_FILE") {
+      return "NOT_APPLICABLE";
+    }
+    if (!localFingerprint) {
+      return "PENDING";
+    }
+    if (!roomState.contentFingerprint) {
+      return "MATCH";
+    }
+    return localFingerprint === roomState.contentFingerprint ? "MATCH" : "MISMATCH";
+  }, [roomState?.sourceType, roomState?.contentFingerprint, localFingerprint]);
+
+  const changeMediaSource = useCallback(
+    (
+      sourceType: MediaSourceType,
+      options?: { contentFingerprint?: string; mediaTitle?: string; directUrl?: string }
+    ) => {
+      if (!isHost) {
+        console.warn("[Watch Together Room] Apenas o Host tem permissão para alterar a fonte de mídia.");
+        return;
+      }
+      send({
+        type: "set_media_source",
+        sourceType,
+        contentFingerprint: options?.contentFingerprint,
+        mediaTitle: options?.mediaTitle,
+        directUrl: options?.directUrl,
+      });
+    },
+    [send, isHost]
+  );
+
+  const registerLocalFile = useCallback((file: File, fingerprint: string) => {
+    setLocalFile(file);
+    setLocalFingerprint(fingerprint);
+  }, []);
 
   return {
     isConnected,
     isSyncing,
     roomState,
     members,
+    isHost,
     driftMs,
     driftZone,
     appliedSpeed,
     chatMessages,
+    sourceType: roomState?.sourceType || computedInitialSourceType,
+    contentFingerprint: roomState?.contentFingerprint,
+    mediaTitle: roomState?.mediaTitle,
+    remoteDirectUrl: roomState?.directUrl || remoteDirectUrl,
+    localFingerprint,
+    localFile,
+    hashMatchStatus,
+    changeMediaSource,
+    registerLocalFile,
     sendPlay,
     sendPause,
     sendSeek,
