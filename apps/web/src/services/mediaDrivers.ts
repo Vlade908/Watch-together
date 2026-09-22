@@ -14,6 +14,31 @@ export interface IMediaSourceDriver {
 export const DEFAULT_DEMO_HLS_STREAM = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
 
 /**
+ * Identifica se o erro do Shaka Player é de interrupção benigna por concorrência (Code 7000: LOAD_INTERRUPTED)
+ */
+export function isShakaLoadInterrupted(error: any): boolean {
+  if (!error) return false;
+  return error.code === 7000 || (error.category === 7 && error.code === 7000);
+}
+
+/**
+ * Identifica se o erro do Shaka Player é de rede, HTTP inválido (404/403) ou CORS (Code 1002 / Category 1)
+ */
+export function isShakaNetworkError(error: any): boolean {
+  if (!error) return false;
+  const msg = String(error.message || "").toLowerCase();
+  return (
+    error.category === 1 ||
+    error.code === 1002 ||
+    error.code === 1003 ||
+    msg.includes("cors") ||
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("bad_http_status")
+  );
+}
+
+/**
  * Driver 1: Catálogo de Demonstração (HLS multi-bitrate via Shaka Player)
  */
 export class CatalogDemoDriver implements IMediaSourceDriver {
@@ -29,7 +54,15 @@ export class CatalogDemoDriver implements IMediaSourceDriver {
 
   async attach(videoElement: HTMLVideoElement, shakaPlayer?: any): Promise<void> {
     if (shakaPlayer) {
-      await shakaPlayer.load(this.directUrl);
+      try {
+        await shakaPlayer.load(this.directUrl);
+      } catch (err: any) {
+        // Silencia erro 7000 (LOAD_INTERRUPTED) caso outro load() ou unmount tenha ocorrido
+        if (isShakaLoadInterrupted(err)) {
+          return;
+        }
+        throw err;
+      }
     } else {
       videoElement.src = this.directUrl;
       videoElement.load();
@@ -76,7 +109,11 @@ export class LocalFileDriver implements IMediaSourceDriver {
     // desanexa-o para permitir reprodução progressiva direta no HTMLVideoElement
     if (shakaPlayer) {
       try {
-        await shakaPlayer.unload();
+        if (typeof shakaPlayer.detach === "function") {
+          await shakaPlayer.detach();
+        } else {
+          await shakaPlayer.unload();
+        }
       } catch {
         // Ignora caso já esteja descarregado
       }
@@ -167,16 +204,30 @@ export class DirectUrlDriver implements IMediaSourceDriver {
       // Remove src nativo para evitar conflito com MediaSource Extensions
       videoElement.removeAttribute("src");
       videoElement.load();
-      await shakaPlayer.load(this.directUrl);
+      try {
+        await shakaPlayer.load(this.directUrl);
+      } catch (err: any) {
+        if (isShakaLoadInterrupted(err)) {
+          return;
+        }
+        throw err;
+      }
     } else {
-      // Mídia progressiva nativa (MP4, WebM)
+      // Mídia progressiva nativa (MP4, WebM, OGV):
+      // Desanexa completamente o Shaka Player para que seus listeners internos não interceptem os eventos de decodificação
       if (shakaPlayer) {
         try {
-          await shakaPlayer.unload();
+          if (typeof shakaPlayer.detach === "function") {
+            await shakaPlayer.detach();
+          } else {
+            await shakaPlayer.unload();
+          }
         } catch {
           // Ignora
         }
       }
+      videoElement.removeAttribute("src");
+      videoElement.load();
       videoElement.src = this.directUrl;
       videoElement.load();
     }

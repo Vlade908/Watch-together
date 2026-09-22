@@ -32,6 +32,8 @@ import {
   DirectUrlDriver,
   CatalogDemoDriver,
   isAdaptiveStreamUrl,
+  isShakaLoadInterrupted,
+  isShakaNetworkError,
 } from "@/services/mediaDrivers";
 import { extractCleanMediaTitle } from "@/services/mediaFingerprint";
 
@@ -115,6 +117,7 @@ export function VideoPlayer({
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const currentDriverRef = useRef<IMediaSourceDriver | null>(null);
+  const loadSequenceRef = useRef<number>(0);
 
   const effectiveSourceType = sourceType || initialSourceType || "CATALOG_DEMO";
 
@@ -157,25 +160,42 @@ export function VideoPlayer({
       !roomState?.sourceType);
 
   const handleShakaError = useCallback((error: any) => {
-    console.error("[VideoPlayer] Erro interceptado do Shaka Player:", error);
+    // 1. Silencia completamente o Shaka Error 7000 (LOAD_INTERRUPTED)
+    // Ocorre quando um load() é cancelado por outro load() mais recente ou por desmontagem do componente
+    if (isShakaLoadInterrupted(error)) {
+      console.debug("[VideoPlayer] Operação load() do Shaka interrompida/cancelada (código 7000).");
+      return;
+    }
+
     const category = error?.category;
     const code = error?.code;
     const msg = error?.message || (typeof error === "string" ? error : "");
 
-    if (
-      category === 1 ||
-      code === 1002 ||
-      code === 1003 ||
-      msg.toLowerCase().includes("cors") ||
-      msg.toLowerCase().includes("network") ||
-      msg.toLowerCase().includes("failed to fetch")
-    ) {
+    // 2. Intercepta Shaka Error 1002 (BAD_HTTP_STATUS / CORS / 404 / 403) ou erro de rede (categoria 1)
+    if (code === 1002 || category === 1 || isShakaNetworkError(error)) {
+      console.warn("[VideoPlayer] Falha de conexão ao stream (Shaka Error 1002 / HTTP Inválido / CORS):", msg || error);
       setPlaybackError(
-        "Bloqueio de CORS ou falha de rede ao carregar o manifesto HLS (.m3u8). O servidor de origem precisa fornecer o cabeçalho 'Access-Control-Allow-Origin: *'."
+        "Não foi possível conectar ao stream. O link informado está offline, expirou (HTTP 404) ou não permite reprodução direta."
       );
-    } else if (code === 1001) {
+      // Limpa buffer de reprodução de forma segura
+      if (shakaPlayerRef.current) {
+        if (typeof shakaPlayerRef.current.detach === "function") {
+          shakaPlayerRef.current.detach().catch(() => {});
+        } else {
+          shakaPlayerRef.current.unload().catch(() => {});
+        }
+      }
+      if (videoRef.current) {
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
+      return;
+    }
+
+    if (code === 1001) {
       setPlaybackError("Protocolo ou formato de URL não suportado pelo player.");
     } else {
+      console.error("[VideoPlayer] Erro interceptado do Shaka Player:", error);
       setPlaybackError(`Erro no player (${code || "desconhecido"}): ${msg || "Falha ao decodificar stream."}`);
     }
   }, []);
@@ -228,13 +248,22 @@ export function VideoPlayer({
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. Inicializa o Driver de Mídia Adequado (UMSA)
+  // 1. Inicializa o Driver de Mídia Adequado (UMSA) com Proteção de Concorrência
   useEffect(() => {
     let isMounted = true;
+    const currentSeq = ++loadSequenceRef.current;
 
     async function getOrInitShakaPlayer(): Promise<any> {
       if (shakaPlayerRef.current) {
-        return shakaPlayerRef.current;
+        const player = shakaPlayerRef.current;
+        if (!player.getMediaElement() && videoRef.current) {
+          try {
+            await player.attach(videoRef.current);
+          } catch (attachErr) {
+            console.warn("[VideoPlayer] Erro ao re-anexar Shaka Player:", attachErr);
+          }
+        }
+        return player;
       }
       if (!videoRef.current) return null;
 
@@ -285,27 +314,36 @@ export function VideoPlayer({
       // Caso 1: Modo Ficheiro Local (Syncplay Web)
       if (isWatchTogether && effectiveSourceType === "LOCAL_FILE") {
         setPlaybackError(null);
+        setAvailableResolutions([]);
+        if (shakaPlayerRef.current) {
+          try {
+            if (typeof shakaPlayerRef.current.detach === "function") {
+              await shakaPlayerRef.current.detach();
+            } else {
+              await shakaPlayerRef.current.unload();
+            }
+          } catch {}
+        }
+
         if (localFile) {
           setIsLoading(true);
           try {
             const driver = new LocalFileDriver(localFile);
             await driver.initialize();
+            if (!isMounted || currentSeq !== loadSequenceRef.current) return;
             await driver.attach(videoRef.current, shakaPlayerRef.current);
-            if (isMounted) {
+            if (isMounted && currentSeq === loadSequenceRef.current) {
               currentDriverRef.current = driver;
               setIsLoading(false);
             }
-          } catch (err) {
+          } catch (err: any) {
+            if (isShakaLoadInterrupted(err)) return;
+            if (!isMounted || currentSeq !== loadSequenceRef.current) return;
             console.error("[VideoPlayer] Falha ao carregar driver de arquivo local:", err);
-            if (isMounted) setIsLoading(false);
+            setIsLoading(false);
           }
         } else {
           // Arquivo local pendente de seleção: NUNCA carrega Shaka ou Demo!
-          if (shakaPlayerRef.current) {
-            try {
-              await shakaPlayerRef.current.unload();
-            } catch {}
-          }
           if (videoRef.current) {
             videoRef.current.src = "";
             videoRef.current.removeAttribute("src");
@@ -329,52 +367,75 @@ export function VideoPlayer({
           setPlaybackError(null);
           try {
             const isAdaptive = isAdaptiveStreamUrl(targetUrl);
-            let shaka = shakaPlayerRef.current;
+            let shaka = null;
             if (isAdaptive) {
               shaka = await getOrInitShakaPlayer();
+              if (!isMounted || currentSeq !== loadSequenceRef.current) return;
+            } else {
+              // Arquivo progressivo direto (.mp4, .webm, .ogv)
+              // Descarrega e desanexa completamente o Shaka Player para que os listeners internos
+              // não interceptem os eventos nativos nem colidam com ORB (Shaka Error 3016)
+              if (shakaPlayerRef.current) {
+                try {
+                  if (typeof shakaPlayerRef.current.detach === "function") {
+                    await shakaPlayerRef.current.detach();
+                  } else {
+                    await shakaPlayerRef.current.unload();
+                  }
+                } catch {}
+              }
+              setAvailableResolutions([]);
             }
 
             const driver = new DirectUrlDriver(targetUrl, mediaTitle);
             await driver.attach(videoRef.current, shaka);
 
-            if (isMounted) {
-              currentDriverRef.current = driver;
+            if (!isMounted || currentSeq !== loadSequenceRef.current) return;
 
-              // Se for HLS/DASH via Shaka Player, extrai faixas de resolução
-              if (shaka && isAdaptive) {
-                try {
-                  const tracks = shaka.getVariantTracks();
-                  const uniqueHeights = Array.from(
-                    new Set(tracks.map((t: any) => t.height).filter(Boolean))
-                  ) as number[];
+            currentDriverRef.current = driver;
 
-                  const resolutions = uniqueHeights
-                    .sort((b, a) => a - b)
-                    .map((height) => {
-                      const track = tracks.find((t: any) => t.height === height);
-                      return { id: track.id, height };
-                    });
+            // Se for HLS/DASH via Shaka Player, extrai faixas de resolução
+            if (shaka && isAdaptive) {
+              try {
+                const tracks = shaka.getVariantTracks();
+                const uniqueHeights = Array.from(
+                  new Set(tracks.map((t: any) => t.height).filter(Boolean))
+                ) as number[];
 
-                  setAvailableResolutions(resolutions);
-                } catch {}
-              }
+                const resolutions = uniqueHeights
+                  .sort((b, a) => a - b)
+                  .map((height) => {
+                    const track = tracks.find((t: any) => t.height === height);
+                    return { id: track.id, height };
+                  });
 
-              setIsLoading(false);
+                setAvailableResolutions(resolutions);
+              } catch {}
             }
+
+            setIsLoading(false);
           } catch (err: any) {
-            console.error("[VideoPlayer] Falha ao carregar driver de URL direta:", err);
-            if (isMounted) {
-              setIsLoading(false);
-              handleShakaError(err);
+            if (isShakaLoadInterrupted(err)) {
+              console.debug("[VideoPlayer] Carregamento de URL direta cancelado/interrompido (código 7000).");
+              return;
             }
+            if (!isMounted || currentSeq !== loadSequenceRef.current) return;
+
+            setIsLoading(false);
+            handleShakaError(err);
           }
         } else {
           // Convidado aguardando o host fornecer a URL direta
           if (shakaPlayerRef.current) {
             try {
-              await shakaPlayerRef.current.unload();
+              if (typeof shakaPlayerRef.current.detach === "function") {
+                await shakaPlayerRef.current.detach();
+              } else {
+                await shakaPlayerRef.current.unload();
+              }
             } catch {}
           }
+          setAvailableResolutions([]);
           if (videoRef.current) {
             videoRef.current.src = "";
             videoRef.current.removeAttribute("src");
@@ -390,9 +451,14 @@ export function VideoPlayer({
       if (!targetManifest || typeof targetManifest !== "string" || !targetManifest.trim()) {
         if (shakaPlayerRef.current) {
           try {
-            await shakaPlayerRef.current.unload();
+            if (typeof shakaPlayerRef.current.detach === "function") {
+              await shakaPlayerRef.current.detach();
+            } else {
+              await shakaPlayerRef.current.unload();
+            }
           } catch {}
         }
+        setAvailableResolutions([]);
         setIsLoading(false);
         return;
       }
@@ -400,7 +466,7 @@ export function VideoPlayer({
       setPlaybackError(null);
       try {
         const player = await getOrInitShakaPlayer();
-        if (!player) {
+        if (!player || !isMounted || currentSeq !== loadSequenceRef.current) {
           setIsLoading(false);
           return;
         }
@@ -413,7 +479,7 @@ export function VideoPlayer({
 
         await player.load(targetManifest);
 
-        if (!isMounted) return;
+        if (!isMounted || currentSeq !== loadSequenceRef.current) return;
 
         const tracks = player.getVariantTracks();
         const uniqueHeights = Array.from(
@@ -430,11 +496,15 @@ export function VideoPlayer({
         setAvailableResolutions(resolutions);
         setIsLoading(false);
       } catch (err: any) {
-        console.error("Falha ao inicializar Shaka Player no Catálogo Demo:", err);
-        if (isMounted) {
-          setIsLoading(false);
-          handleShakaError(err);
+        if (isShakaLoadInterrupted(err)) {
+          console.debug("[VideoPlayer] Carregamento do Catálogo Demo cancelado/interrompido (código 7000).");
+          return;
         }
+        if (!isMounted || currentSeq !== loadSequenceRef.current) return;
+
+        console.error("[VideoPlayer] Falha ao inicializar Shaka Player no Catálogo Demo:", err);
+        setIsLoading(false);
+        handleShakaError(err);
       }
     }
 
@@ -442,6 +512,7 @@ export function VideoPlayer({
 
     return () => {
       isMounted = false;
+      loadSequenceRef.current++;
       if (currentDriverRef.current) {
         currentDriverRef.current.detach().catch(() => {});
       }
@@ -456,6 +527,18 @@ export function VideoPlayer({
     mediaTitle,
     handleShakaError,
   ]);
+
+  // Destruição do Shaka Player na desmontagem do componente
+  useEffect(() => {
+    return () => {
+      if (shakaPlayerRef.current) {
+        try {
+          shakaPlayerRef.current.destroy().catch(() => {});
+        } catch {}
+        shakaPlayerRef.current = null;
+      }
+    };
+  }, []);
 
   // 2. Event Listeners do Elemento <video>
   useEffect(() => {
@@ -741,7 +824,7 @@ export function VideoPlayer({
             <div className="p-2 rounded-xl bg-red-500/20 text-red-400 flex-none mt-0.5">
               <AlertTriangle className="w-5 h-5" />
             </div>
-            <div className="space-y-1 flex-1 text-xs">
+            <div className="space-y-2 flex-1 text-xs">
               <div className="flex items-center justify-between">
                 <p className="font-bold text-white text-sm">Falha no Carregamento da Mídia</p>
                 <button
@@ -752,6 +835,29 @@ export function VideoPlayer({
                 </button>
               </div>
               <p className="text-neutral-300 leading-relaxed">{playbackError}</p>
+              <div className="flex items-center space-x-2 pt-1">
+                {isHost && (
+                  <button
+                    onClick={() => {
+                      setPlaybackError(null);
+                      setIsSourceModalOpen(true);
+                    }}
+                    className="py-1.5 px-3 rounded-lg bg-[#E50914] hover:bg-[#ff2b36] text-white font-semibold text-[11px] transition-colors cursor-pointer shadow-md shadow-[#E50914]/20 flex items-center space-x-1.5"
+                  >
+                    <span>Trocar Link / Fonte</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setPlaybackError(null);
+                    setIsLoading(true);
+                    loadSequenceRef.current++;
+                  }}
+                  className="py-1.5 px-3 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 hover:text-white font-medium text-[11px] transition-colors cursor-pointer"
+                >
+                  Tentar Novamente
+                </button>
+              </div>
             </div>
           </div>
         </div>

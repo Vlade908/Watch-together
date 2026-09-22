@@ -443,12 +443,29 @@ export function SourceSelectorModal({
                       Insira o link HTTPS de um arquivo (.mp4, .webm) ou manifesto HLS (.m3u8) hospedado em seu
                       servidor pessoal, WebDAV ou armazenamento na nuvem.
                     </p>
+                    <p className="text-[10px] text-amber-400/90 pt-1 leading-relaxed">
+                      ⚠️ O servidor de origem precisa fornecer o cabeçalho <code>Access-Control-Allow-Origin: *</code>.
+                      Links de terceiros com tokens efêmeros ou bloqueio de hotlink podem retornar HTTP 404/403.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider block">
-                      URL Direta do Vídeo (HTTPS)
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider block">
+                        URL Direta do Vídeo (HTTPS)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDirectUrlInput("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8");
+                          setDirectTitleInput("Big Buck Bunny (HLS ABR Oficial)");
+                          setUrlError("");
+                        }}
+                        className="text-[10px] text-[#38bdf8] hover:text-[#7dd3fc] underline font-medium transition-colors cursor-pointer"
+                      >
+                        Preencher stream HLS de teste
+                      </button>
+                    </div>
                     <input
                       type="url"
                       placeholder="https://exemplo.com/meu-video.mp4"
