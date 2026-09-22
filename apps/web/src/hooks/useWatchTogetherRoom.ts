@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { RoomState, RoomMember, ServerMessage, ClientMessage, MediaSourceType } from "../types/sync";
 import { ClockSyncEngine, DriftController, DriftEvaluationResult } from "../services/syncEngine";
 import { useAuth } from "@/context/AuthContext";
@@ -25,11 +26,13 @@ export function useWatchTogetherRoom({
   initialSourceType,
   mediaTitle,
 }: UseWatchTogetherRoomOptions) {
+  const router = useRouter();
   const { user: authUser } = useAuth();
 
   const computedInitialSourceType: MediaSourceType = useMemo(() => {
     if (initialSourceType) return initialSourceType;
     if (roomId.includes("local") || roomId.includes("arquivo-local")) return "LOCAL_FILE";
+    if (roomId.includes("direto") || roomId.includes("url")) return "DIRECT_URL";
     return "CATALOG_DEMO";
   }, [initialSourceType, roomId]);
 
@@ -82,6 +85,23 @@ export function useWatchTogetherRoom({
   const [localFingerprint, setLocalFingerprint] = useState<string | null>(null);
   const [localFile, setLocalFile] = useState<File | null>(null);
   const [remoteDirectUrl, setRemoteDirectUrl] = useState<string | null>(null);
+
+  // Isolamento de Rota: se a sala alternar entre Ficheiro Local e URL Remota,
+  // migra a navegação dos clientes para isolar drivers e evitar requisições a blobs inexistentes
+  useEffect(() => {
+    if (!enabled || typeof window === "undefined") return;
+    const currentPath = window.location.pathname;
+
+    if (roomState?.sourceType === "DIRECT_URL" && currentPath.includes("/watch/arquivo-local")) {
+      const roomParam = roomId ? `?mode=room&room=${encodeURIComponent(roomId)}` : "";
+      console.log(`[Watch Together Room] Migrando rota de /watch/arquivo-local para /watch/direto${roomParam}`);
+      router.replace(`/watch/direto${roomParam}`);
+    } else if (roomState?.sourceType === "LOCAL_FILE" && currentPath.includes("/watch/direto")) {
+      const roomParam = roomId ? `?mode=room&room=${encodeURIComponent(roomId)}` : "";
+      console.log(`[Watch Together Room] Migrando rota de /watch/direto para /watch/arquivo-local${roomParam}`);
+      router.replace(`/watch/arquivo-local${roomParam}`);
+    }
+  }, [enabled, roomState?.sourceType, roomId, router]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const clockSyncRef = useRef<ClockSyncEngine>(new ClockSyncEngine());

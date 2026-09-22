@@ -330,10 +330,19 @@ export function handleRoomWebSocket(
 
           // Atualiza o título da sala no PresenceService para refletir na Central de Atividades e no Social
           const members = await RoomService.getMembers(roomId);
+          const activeMediaSlug =
+            updatedState.sourceType === "LOCAL_FILE"
+              ? "arquivo-local"
+              : updatedState.sourceType === "DIRECT_URL"
+              ? "direto"
+              : updatedState.mediaId;
+
           const activeTitleName =
             updatedState.mediaTitle ||
             (updatedState.sourceType === "LOCAL_FILE"
               ? "Ficheiro Local (Syncplay)"
+              : updatedState.sourceType === "DIRECT_URL"
+              ? "URL Direta (Transmissão Remota)"
               : updatedState.mediaId === "interestelar-alem-do-horizonte"
               ? "Interestelar: Além do Horizonte"
               : updatedState.mediaId);
@@ -345,10 +354,10 @@ export function handleRoomWebSocket(
 
           await PresenceService.registerActiveRoom({
             roomId,
-            mediaId: updatedState.mediaId,
+            mediaId: activeMediaSlug,
             titleName: activeTitleName,
             bannerUrl: activeBannerUrl,
-            slug: updatedState.mediaId,
+            slug: activeMediaSlug,
             hostName: updatedState.hostName || currentMember.userName,
             participantsCount: members.length,
             maxParticipants: 10,

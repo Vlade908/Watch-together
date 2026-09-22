@@ -23,6 +23,9 @@ export default function WatchPage({ params }: WatchPageProps) {
   const isLocalFileMode =
     resolvedParams.slug === "arquivo-local" || searchParams.get("source") === "local";
 
+  const isDirectUrlMode =
+    resolvedParams.slug === "direto" || resolvedParams.slug === "url";
+
   const isRoomMode = searchParams.get("mode") === "room";
   const roomParam = searchParams.get("room");
   const effectiveRoomId = roomParam || (isRoomMode ? `room-${resolvedParams.slug}` : undefined);
@@ -32,11 +35,14 @@ export default function WatchPage({ params }: WatchPageProps) {
     if (isLocalFileMode) {
       return "Ficheiro Local (Syncplay)";
     }
+    if (isDirectUrlMode) {
+      return "URL Direta (Transmissão Remota)";
+    }
     return resolvedParams.slug
       .split("-")
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
-  }, [resolvedParams.slug, isLocalFileMode]);
+  }, [resolvedParams.slug, isLocalFileMode, isDirectUrlMode]);
 
   // Busca metadados do título do catálogo para enriquecer o card de presença
   const catalogTitle = React.useMemo(() => {
@@ -49,6 +55,15 @@ export default function WatchPage({ params }: WatchPageProps) {
           "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=1200&auto=format&fit=crop",
       };
     }
+    if (isDirectUrlMode) {
+      return {
+        id: "direto",
+        name: "URL Direta (Transmissão Remota)",
+        slug: resolvedParams.slug,
+        bannerUrl:
+          "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
+      };
+    }
     return (
       CATALOG_DATA.find((t) => t.slug === resolvedParams.slug) || {
         id: resolvedParams.slug,
@@ -58,7 +73,7 @@ export default function WatchPage({ params }: WatchPageProps) {
           "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&auto=format&fit=crop",
       }
     );
-  }, [resolvedParams.slug, titleFormatted, isLocalFileMode]);
+  }, [resolvedParams.slug, titleFormatted, isLocalFileMode, isDirectUrlMode]);
 
   const [activeMediaTitle, setActiveMediaTitle] = React.useState<string | null>(null);
 
@@ -103,18 +118,20 @@ export default function WatchPage({ params }: WatchPageProps) {
   return (
     <main className="w-screen h-screen bg-black overflow-hidden relative">
       <VideoPlayer
-        manifestUrl={isLocalFileMode ? "" : DEMO_HLS_STREAM}
+        manifestUrl={isLocalFileMode || isDirectUrlMode ? "" : DEMO_HLS_STREAM}
         titleName={activeMediaTitle || titleFormatted}
         episodeName={
           isLocalFileMode
             ? "Reprodução Local em Alta Fidelidade (Zero Buffer)"
+            : isDirectUrlMode
+            ? "Transmissão Remota via URL Direta"
             : "Temporada 1: Episódio 1 (4K UHD Multi-bitrate)"
         }
         isWatchTogether={isRoomMode}
         roomId={effectiveRoomId}
         userId={user?.id}
         userName={user?.name}
-        initialSourceType={isLocalFileMode ? "LOCAL_FILE" : "CATALOG_DEMO"}
+        initialSourceType={isLocalFileMode ? "LOCAL_FILE" : isDirectUrlMode ? "DIRECT_URL" : "CATALOG_DEMO"}
         onMediaTitleChange={setActiveMediaTitle}
         onPlay={() => console.log("[Player] Play disparado")}
         onPause={() => console.log("[Player] Pause disparado")}

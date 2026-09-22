@@ -22,6 +22,7 @@ import {
   Lock,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useWatchTogetherRoom } from "@/hooks/useWatchTogetherRoom";
 import { MediaSourceType } from "@/types/sync";
 import { getApiBaseUrl } from "@/context/AuthContext";
@@ -70,6 +71,7 @@ export function VideoPlayer({
   onPause,
   onSeek,
 }: VideoPlayerProps) {
+  const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const shakaPlayerRef = useRef<any>(null);
@@ -116,6 +118,7 @@ export function VideoPlayer({
   const [isLoading, setIsLoading] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
   const [bufferedPercentage, setBufferedPercentage] = useState(0);
+  const [isProxyLoading, setIsProxyLoading] = useState(false);
 
   // Estados de UMSA & Modal de Seleção de Fontes
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
@@ -181,7 +184,36 @@ export function VideoPlayer({
     const code = error?.code;
     const msg = error?.message || (typeof error === "string" ? error : "");
 
-    // 2. Intercepta especificamente HTTP 404 (Link expirado ou inexistente)
+    // 2. Intercepta falhas no Proxy de Streaming (Erro Upstream 502/504 ou UPSTREAM_UNAVAILABLE)
+    if (
+      remoteDirectUrl?.includes("/api/proxy/") ||
+      msg.includes("UPSTREAM") ||
+      (code === 1002 && remoteDirectUrl?.includes("/api/proxy/"))
+    ) {
+      console.warn("[VideoPlayer] Erro upstream via proxy:", msg || error);
+      setPlaybackError(
+        "Não foi possível carregar via proxy: o link remoto expirou ou não respondeu (Erro Upstream)."
+      );
+      setIsLoading(false);
+      setIsBuffering(false);
+
+      if (shakaPlayerRef.current) {
+        try {
+          if (typeof shakaPlayerRef.current.detach === "function") {
+            shakaPlayerRef.current.detach().catch(() => {});
+          } else {
+            shakaPlayerRef.current.unload().catch(() => {});
+          }
+        } catch {}
+      }
+      if (videoRef.current) {
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
+      return;
+    }
+
+    // 3. Intercepta especificamente HTTP 404 (Link expirado ou inexistente)
     if (isShaka404Error(error)) {
       console.warn("[VideoPlayer] Link de vídeo inexistente ou expirado (HTTP 404):", msg || error);
       setPlaybackError(
@@ -206,7 +238,7 @@ export function VideoPlayer({
       return;
     }
 
-    // 3. Intercepta Shaka Error 1002 (BAD_HTTP_STATUS / CORS / 403) ou erro de rede (categoria 1)
+    // 4. Intercepta Shaka Error 1002 (BAD_HTTP_STATUS / CORS / 403) ou erro de rede (categoria 1)
     if (code === 1002 || category === 1 || isShakaNetworkError(error)) {
       console.warn("[VideoPlayer] Falha de conexão ao stream (Shaka Error 1002 / HTTP Inválido / CORS):", msg || error);
       setPlaybackError(
@@ -238,7 +270,58 @@ export function VideoPlayer({
       console.error("[VideoPlayer] Erro interceptado do Shaka Player:", error);
       setPlaybackError(`Erro no player (${code || "desconhecido"}): ${msg || "Falha ao decodificar stream."}`);
     }
-  }, []);
+  }, [remoteDirectUrl]);
+
+  // Tentativa segura de streaming via Proxy do Servidor com verificação de conectividade upstream
+  const handleTryProxy = async () => {
+    if (!remoteDirectUrl || isProxyLoading) return;
+    setIsProxyLoading(true);
+    setPlaybackError(null);
+    setIsLoading(true);
+
+    const apiBase = getApiBaseUrl();
+    const proxiedUrl = `${apiBase}/api/proxy/manifest?url=${encodeURIComponent(remoteDirectUrl)}`;
+
+    try {
+      // Timeout de segurança de 10s para sondar o stream proxy antes da vinculação
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const probeRes = await fetch(proxiedUrl, {
+        signal: controller.signal,
+        headers: { Accept: "*/*" },
+      });
+      clearTimeout(timeoutId);
+
+      if (!probeRes.ok) {
+        let errorDetail = "";
+        try {
+          const errJson = await probeRes.json();
+          errorDetail = errJson.message || errJson.details || errJson.error || "";
+        } catch {}
+        throw new Error(errorDetail || `HTTP ${probeRes.status}`);
+      }
+
+      // Conexão ao proxy validada com sucesso! Aplica a URL na sala
+      if (isHost) {
+        changeMediaSource("DIRECT_URL", {
+          directUrl: proxiedUrl,
+          mediaTitle: displayTitle,
+        });
+      } else {
+        loadSequenceRef.current++;
+      }
+    } catch (err: any) {
+      console.warn("[VideoPlayer] Falha ao conectar via Proxy do Servidor:", err);
+      setPlaybackError(
+        "Não foi possível carregar via proxy: o link remoto expirou ou não respondeu (Erro Upstream)."
+      );
+      setIsLoading(false);
+      setIsBuffering(false);
+    } finally {
+      setIsProxyLoading(false);
+    }
+  };
 
   // Controle de abertura do modal de seleção de arquivo local:
   // Para o Host: abre imediatamente para que ele escolha o arquivo
@@ -1004,27 +1087,27 @@ export function VideoPlayer({
                     <span>Tentar outra URL</span>
                   </button>
                 )}
-                {!playbackError.includes("404") && playbackError.includes("CORS") && effectiveSourceType === "DIRECT_URL" && remoteDirectUrl && !remoteDirectUrl.includes("/api/proxy/manifest") && (
-                  <button
-                    onClick={() => {
-                      setPlaybackError(null);
-                      setIsLoading(true);
-                      const apiBase = getApiBaseUrl();
-                      const proxied = `${apiBase}/api/proxy/manifest?url=${encodeURIComponent(remoteDirectUrl)}`;
-                      if (isHost) {
-                        changeMediaSource("DIRECT_URL", {
-                          directUrl: proxied,
-                          mediaTitle: displayTitle,
-                        });
-                      } else {
-                        loadSequenceRef.current++;
-                      }
-                    }}
-                    className="py-1.5 px-3 rounded-lg bg-blue-600/80 hover:bg-blue-600 text-white font-semibold text-[11px] transition-colors cursor-pointer flex items-center space-x-1.5"
-                  >
-                    <span>Tentar via Proxy do Servidor</span>
-                  </button>
-                )}
+                {!playbackError.includes("404") &&
+                  !playbackError.includes("Upstream") &&
+                  playbackError.includes("CORS") &&
+                  effectiveSourceType === "DIRECT_URL" &&
+                  remoteDirectUrl &&
+                  !remoteDirectUrl.includes("/api/proxy/manifest") && (
+                    <button
+                      onClick={handleTryProxy}
+                      disabled={isProxyLoading}
+                      className="py-1.5 px-3 rounded-lg bg-blue-600/80 hover:bg-blue-600 disabled:opacity-60 text-white font-semibold text-[11px] transition-colors cursor-pointer flex items-center space-x-1.5"
+                    >
+                      {isProxyLoading ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span>Conectando ao Proxy...</span>
+                        </>
+                      ) : (
+                        <span>Tentar via Proxy do Servidor</span>
+                      )}
+                    </button>
+                  )}
                 <Link
                   href="/"
                   className="py-1.5 px-3 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 hover:text-white font-medium text-[11px] transition-colors cursor-pointer flex items-center space-x-1"
@@ -1313,6 +1396,10 @@ export function VideoPlayer({
               contentFingerprint: fingerprint,
               mediaTitle: customTitle || extractCleanMediaTitle(file.name),
             });
+            if (typeof window !== "undefined" && !window.location.pathname.includes("/watch/arquivo-local")) {
+              const roomQuery = roomId ? `?mode=room&room=${encodeURIComponent(roomId)}` : "";
+              router.push(`/watch/arquivo-local${roomQuery}`);
+            }
           }
         }}
         onSelectDirectUrl={(url, title) => {
@@ -1321,6 +1408,10 @@ export function VideoPlayer({
               directUrl: url,
               mediaTitle: title || extractCleanMediaTitle(url),
             });
+            if (typeof window !== "undefined" && window.location.pathname.includes("/watch/arquivo-local")) {
+              const roomQuery = roomId ? `?mode=room&room=${encodeURIComponent(roomId)}` : "";
+              router.push(`/watch/direto${roomQuery}`);
+            }
           }
         }}
         onSelectCatalogDemo={() => {

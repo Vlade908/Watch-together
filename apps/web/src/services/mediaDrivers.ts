@@ -174,6 +174,7 @@ export function isAdaptiveStreamUrl(url: string): boolean {
   const cleanUrl = url.toLowerCase().split("?")[0].split("#")[0];
   const fullUrl = url.toLowerCase();
   return (
+    cleanUrl.includes("/proxy/manifest") ||
     cleanUrl.endsWith(".m3u8") ||
     cleanUrl.endsWith(".mpd") ||
     fullUrl.includes(".m3u8") ||
