@@ -35,6 +35,7 @@ import {
   isAdaptiveStreamUrl,
   isShakaLoadInterrupted,
   isShakaNetworkError,
+  isShaka404Error,
 } from "@/services/mediaDrivers";
 import { extractCleanMediaTitle } from "@/services/mediaFingerprint";
 
@@ -121,7 +122,11 @@ export function VideoPlayer({
   const currentDriverRef = useRef<IMediaSourceDriver | null>(null);
   const loadSequenceRef = useRef<number>(0);
 
-  const effectiveSourceType = sourceType || initialSourceType || "CATALOG_DEMO";
+  // Prioriza URL remota direta caso a sala possua directUrl válida configurada
+  const hasRemoteDirectUrl = Boolean(remoteDirectUrl && !remoteDirectUrl.startsWith("blob:"));
+  const effectiveSourceType: MediaSourceType = hasRemoteDirectUrl
+    ? "DIRECT_URL"
+    : (sourceType || initialSourceType || "CATALOG_DEMO");
 
   // Título e subtítulo dinâmicos da mídia em exibição
   const displayTitle =
@@ -153,12 +158,14 @@ export function VideoPlayer({
   const hostMember = members.find((m) => m.isHost);
   const hostDisplayName = hostMember?.userName || roomState?.hostName || "o Anfitrião";
 
-  // O Convidado está em espera caso a sala ainda não possua mídia definida pelo Host
+  // O Convidado está em espera caso a sala ainda não possua mídia definida pelo Host.
+  // Nota: No modo LOCAL_FILE, o participante NÃO fica preso no estado de espera genérico,
+  // mas sim visualiza a tela orientativa específica para selecionar seu arquivo local correspondente.
   const isWaitingForHostMedia =
     isWatchTogether &&
     !isHost &&
-    ((effectiveSourceType === "LOCAL_FILE" && !contentFingerprint) ||
-      (effectiveSourceType === "DIRECT_URL" && !remoteDirectUrl) ||
+    effectiveSourceType !== "LOCAL_FILE" &&
+    ((effectiveSourceType === "DIRECT_URL" && !remoteDirectUrl) ||
       !roomState?.sourceType);
 
   const handleShakaError = useCallback((error: any) => {
@@ -173,7 +180,32 @@ export function VideoPlayer({
     const code = error?.code;
     const msg = error?.message || (typeof error === "string" ? error : "");
 
-    // 2. Intercepta Shaka Error 1002 (BAD_HTTP_STATUS / CORS / 404 / 403) ou erro de rede (categoria 1)
+    // 2. Intercepta especificamente HTTP 404 (Link expirado ou inexistente)
+    if (isShaka404Error(error)) {
+      console.warn("[VideoPlayer] Link de vídeo inexistente ou expirado (HTTP 404):", msg || error);
+      setPlaybackError(
+        "O link do vídeo expirou ou não foi encontrado no servidor de origem (Erro 404)."
+      );
+      setIsLoading(false);
+      setIsBuffering(false);
+
+      if (shakaPlayerRef.current) {
+        try {
+          if (typeof shakaPlayerRef.current.detach === "function") {
+            shakaPlayerRef.current.detach().catch(() => {});
+          } else {
+            shakaPlayerRef.current.unload().catch(() => {});
+          }
+        } catch {}
+      }
+      if (videoRef.current) {
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
+      return;
+    }
+
+    // 3. Intercepta Shaka Error 1002 (BAD_HTTP_STATUS / CORS / 403) ou erro de rede (categoria 1)
     if (code === 1002 || category === 1 || isShakaNetworkError(error)) {
       console.warn("[VideoPlayer] Falha de conexão ao stream (Shaka Error 1002 / HTTP Inválido / CORS):", msg || error);
       setPlaybackError(
@@ -373,9 +405,8 @@ export function VideoPlayer({
             setIsLoading(false);
           }
         } else {
-          // Arquivo local pendente de seleção: NUNCA carrega Shaka ou Demo!
+          // Arquivo local pendente de seleção: NUNCA carrega Shaka ou Demo e NUNCA atribui blob/src vazio!
           if (videoRef.current) {
-            videoRef.current.src = "";
             videoRef.current.removeAttribute("src");
             videoRef.current.load();
           }
@@ -478,7 +509,6 @@ export function VideoPlayer({
           }
           setAvailableResolutions([]);
           if (videoRef.current) {
-            videoRef.current.src = "";
             videoRef.current.removeAttribute("src");
             videoRef.current.load();
           }
@@ -940,7 +970,7 @@ export function VideoPlayer({
                     <span>Tentar outra URL</span>
                   </button>
                 )}
-                {playbackError.includes("CORS") && effectiveSourceType === "DIRECT_URL" && remoteDirectUrl && !remoteDirectUrl.includes("/api/proxy/manifest") && (
+                {!playbackError.includes("404") && playbackError.includes("CORS") && effectiveSourceType === "DIRECT_URL" && remoteDirectUrl && !remoteDirectUrl.includes("/api/proxy/manifest") && (
                   <button
                     onClick={() => {
                       setPlaybackError(null);
@@ -968,16 +998,18 @@ export function VideoPlayer({
                   <ArrowLeft className="w-3.5 h-3.5 mr-1" />
                   <span>Voltar ao Catálogo</span>
                 </Link>
-                <button
-                  onClick={() => {
-                    setPlaybackError(null);
-                    setIsLoading(true);
-                    loadSequenceRef.current++;
-                  }}
-                  className="py-1.5 px-3 rounded-lg bg-white/5 hover:bg-white/15 text-neutral-300 hover:text-white font-medium text-[11px] transition-colors cursor-pointer"
-                >
-                  Tentar Novamente
-                </button>
+                {!playbackError.includes("404") && (
+                  <button
+                    onClick={() => {
+                      setPlaybackError(null);
+                      setIsLoading(true);
+                      loadSequenceRef.current++;
+                    }}
+                    className="py-1.5 px-3 rounded-lg bg-white/5 hover:bg-white/15 text-neutral-300 hover:text-white font-medium text-[11px] transition-colors cursor-pointer"
+                  >
+                    Tentar Novamente
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1198,7 +1230,7 @@ export function VideoPlayer({
       )}
 
       {/* Overlay para Modo Ficheiro Local quando o arquivo não está carregado */}
-      {isWatchTogether && !isWaitingForHostMedia && effectiveSourceType === "LOCAL_FILE" && !localFile && (
+      {isWatchTogether && effectiveSourceType === "LOCAL_FILE" && !localFile && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm p-6 animate-in fade-in">
           <div className="max-w-md w-full bg-[#161616] border border-white/15 rounded-2xl p-6 text-center space-y-4 shadow-2xl">
             <div className="w-14 h-14 mx-auto rounded-full bg-[#E50914]/20 text-[#E50914] flex items-center justify-center">
@@ -1211,7 +1243,7 @@ export function VideoPlayer({
               <p className="text-xs text-neutral-300 leading-relaxed">
                 {isHost
                   ? "Selecione o arquivo de vídeo (.mp4, .webm) no seu computador para iniciar a reprodução da sala com fidelidade nativa e zero tráfego no servidor."
-                  : `O anfitrião está assistindo "${mediaTitle || "um arquivo local"}". Selecione o seu arquivo correspondente para sincronizar a reprodução.`}
+                  : "O host está compartilhando um arquivo local. Para sincronizar via Syncplay, selecione a mesma cópia do arquivo no seu computador."}
               </p>
             </div>
             <button
@@ -1219,7 +1251,7 @@ export function VideoPlayer({
               className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#B20710] to-[#E50914] hover:from-[#c20812] hover:to-[#ff2b36] text-white font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-[#E50914]/30 flex items-center justify-center space-x-2 cursor-pointer"
             >
               <FileVideo className="w-4 h-4" />
-              <span>{isHost ? "Selecionar Meu Arquivo Local" : "Carregar Meu Arquivo Local"}</span>
+              <span>{isHost ? "Selecionar Meu Arquivo Local" : "Selecionar Arquivo Local"}</span>
             </button>
           </div>
         </div>
@@ -1230,7 +1262,7 @@ export function VideoPlayer({
         isOpen={isSourceModalOpen && !isWaitingForHostMedia}
         onClose={() => setIsSourceModalOpen(false)}
         isHost={isHost}
-        currentSourceType={sourceType}
+        currentSourceType={effectiveSourceType}
         expectedFingerprint={contentFingerprint}
         remoteDirectUrl={remoteDirectUrl || undefined}
         currentMediaTitle={displayTitle}

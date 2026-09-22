@@ -161,12 +161,8 @@ export function useWatchTogetherRoom({
               case "room_state": {
                 setRoomState(message.state);
                 setMembers(message.members);
-                if (message.state.directUrl) {
-                  if (message.state.directUrl.startsWith("blob:") && !isHost) {
-                    console.warn("[Watch Together Room] URL blob: remota ignorada para participante.");
-                  } else {
-                    setRemoteDirectUrl(message.state.directUrl);
-                  }
+                if (message.state.directUrl && !message.state.directUrl.startsWith("blob:")) {
+                  setRemoteDirectUrl(message.state.directUrl);
                 }
 
                 // Alinha o vídeo local com o estado inicial
@@ -218,12 +214,8 @@ export function useWatchTogetherRoom({
               case "source_updated": {
                 setRoomState(message.state);
                 const newDirectUrl = message.directUrl || message.state.directUrl;
-                if (newDirectUrl) {
-                  if (newDirectUrl.startsWith("blob:") && !isHost) {
-                    console.warn("[Watch Together Room] URL blob: remota ignorada em source_updated para participante.");
-                  } else {
-                    setRemoteDirectUrl(newDirectUrl);
-                  }
+                if (newDirectUrl && !newDirectUrl.startsWith("blob:")) {
+                  setRemoteDirectUrl(newDirectUrl);
                 }
                 break;
               }
@@ -518,7 +510,9 @@ export function useWatchTogetherRoom({
     sourceType: roomState?.sourceType || computedInitialSourceType,
     contentFingerprint: roomState?.contentFingerprint,
     mediaTitle: roomState?.mediaTitle,
-    remoteDirectUrl: roomState?.directUrl || remoteDirectUrl,
+    remoteDirectUrl:
+      (roomState?.directUrl && !roomState.directUrl.startsWith("blob:") ? roomState.directUrl : undefined) ||
+      (remoteDirectUrl && !remoteDirectUrl.startsWith("blob:") ? remoteDirectUrl : undefined),
     localFingerprint,
     localFile,
     hashMatchStatus,

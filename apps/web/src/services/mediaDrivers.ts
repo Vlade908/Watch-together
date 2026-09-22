@@ -39,6 +39,18 @@ export function isShakaNetworkError(error: any): boolean {
 }
 
 /**
+ * Identifica se o erro do Shaka Player é especificamente HTTP 404 (Not Found / Stream expirado)
+ */
+export function isShaka404Error(error: any): boolean {
+  if (!error) return false;
+  const httpStatus = error.data?.[1] ?? error.status ?? error.statusCode;
+  if (httpStatus === 404) return true;
+  if (Array.isArray(error.data) && error.data.includes(404)) return true;
+  const msg = String(error.message || (typeof error === "string" ? error : "")).toLowerCase();
+  return msg.includes("404") || msg.includes("not found");
+}
+
+/**
  * Driver 1: Catálogo de Demonstração (HLS multi-bitrate via Shaka Player)
  */
 export class CatalogDemoDriver implements IMediaSourceDriver {

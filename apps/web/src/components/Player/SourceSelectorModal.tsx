@@ -174,8 +174,9 @@ export function SourceSelectorModal({
     calculatedFingerprint.fingerprint !== expectedFingerprint;
 
   // Trava de segurança: impede montagem/abertura para convidados se o Host ainda não tiver definido a mídia
+  // Se a modalidade for LOCAL_FILE, permite que o convidado selecione sua cópia local
   if (!isOpen) return null;
-  if (!isHost && !expectedFingerprint && !remoteDirectUrl) return null;
+  if (!isHost && !expectedFingerprint && !remoteDirectUrl && currentSourceType !== "LOCAL_FILE") return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">

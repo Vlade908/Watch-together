@@ -308,7 +308,10 @@ export function handleRoomWebSocket(
           }
 
           const safeMediaTitle = parsed.mediaTitle ? String(parsed.mediaTitle).slice(0, 150) : undefined;
-          const safeDirectUrl = parsed.directUrl ? String(parsed.directUrl).slice(0, 2048) : undefined;
+          const safeDirectUrl =
+            parsed.directUrl && !parsed.directUrl.startsWith("blob:")
+              ? String(parsed.directUrl).slice(0, 2048)
+              : undefined;
 
           const updatedState = await RoomService.updateRoomMediaSource(
             roomId,
