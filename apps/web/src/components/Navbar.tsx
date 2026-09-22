@@ -145,16 +145,16 @@ export function Navbar() {
               >
                 Início
               </Link>
-              <Link href="/series" className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
+              <Link href="/series" prefetch={false} className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
                 Séries
               </Link>
-              <Link href="/filmes" className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
+              <Link href="/filmes" prefetch={false} className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
                 Filmes
               </Link>
-              <Link href="/bombando" className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
+              <Link href="/bombando" prefetch={false} className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
                 Bombando
               </Link>
-              <Link href="/minha-lista" className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
+              <Link href="/minha-lista" prefetch={false} className="text-[#b3b3b3] hover:text-[#e5e5e5] transition-colors">
                 Minha Lista
               </Link>
               <button

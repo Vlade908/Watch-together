@@ -24,10 +24,10 @@ function RegisterForm() {
   // Se já estiver logado, redireciona imediatamente
   React.useEffect(() => {
     if (isAuthenticated) {
-      router.replace(targetRedirect);
-      router.refresh();
       if (typeof window !== "undefined") {
-        window.location.assign(targetRedirect);
+        window.location.href = targetRedirect;
+      } else {
+        router.replace(targetRedirect);
       }
     }
   }, [isAuthenticated, targetRedirect, router]);
@@ -48,15 +48,16 @@ function RegisterForm() {
 
     setIsSubmitting(true);
     const result = await register({ name, email, password });
-    setIsSubmitting(false);
 
     if (result.success) {
-      router.push(targetRedirect);
-      router.refresh();
+      // Hard navigation imediata para recarregar o estado global de sessão e evitar falhas de RSC prefetch
       if (typeof window !== "undefined") {
-        window.location.assign(targetRedirect);
+        window.location.href = targetRedirect;
+      } else {
+        router.push(targetRedirect);
       }
     } else {
+      setIsSubmitting(false);
       setError(result.error || "Falha ao criar conta");
     }
   };

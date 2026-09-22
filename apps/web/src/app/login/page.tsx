@@ -23,10 +23,10 @@ function LoginForm() {
   // Se já estiver logado, redireciona imediatamente para o destino pretendido
   React.useEffect(() => {
     if (isAuthenticated) {
-      router.replace(targetRedirect);
-      router.refresh();
       if (typeof window !== "undefined") {
-        window.location.assign(targetRedirect);
+        window.location.href = targetRedirect;
+      } else {
+        router.replace(targetRedirect);
       }
     }
   }, [isAuthenticated, targetRedirect, router]);
@@ -42,15 +42,16 @@ function LoginForm() {
 
     setIsSubmitting(true);
     const result = await login({ email, password });
-    setIsSubmitting(false);
 
     if (result.success) {
-      router.push(targetRedirect);
-      router.refresh();
+      // Hard navigation imediata para recarregar o estado global de sessão e evitar falhas de RSC prefetch
       if (typeof window !== "undefined") {
-        window.location.assign(targetRedirect);
+        window.location.href = targetRedirect;
+      } else {
+        router.push(targetRedirect);
       }
     } else {
+      setIsSubmitting(false);
       setError(result.error || "Falha na autenticação");
     }
   };
