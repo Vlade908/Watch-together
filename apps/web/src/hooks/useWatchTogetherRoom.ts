@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { RoomState, RoomMember, ServerMessage, ClientMessage, MediaSourceType } from "../types/sync";
 import { ClockSyncEngine, DriftController, DriftEvaluationResult } from "../services/syncEngine";
 import { useAuth } from "@/context/AuthContext";
+import { getWsBaseUrl } from "@/utils/network";
 
 interface UseWatchTogetherRoomOptions {
   roomId: string;
@@ -94,27 +95,9 @@ export function useWatchTogetherRoom({
     }
   }, []);
 
-  // Determina a URL do WebSocket com resolução dinâmica para rede local (LAN)
-  const resolveWsUrl = useCallback((room: string, attempt = 0) => {
-    let base = "";
-    if (typeof window !== "undefined") {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = window.location.hostname || "localhost";
-      const envUrl = process.env.NEXT_PUBLIC_WS_URL;
-
-      if (envUrl) {
-        base = envUrl
-          .replace(/^http:/, "ws:")
-          .replace(/^https:/, "wss:")
-          .replace("localhost", host)
-          .replace("127.0.0.1", host);
-      } else {
-        base = `${protocol}//${host}:4000`;
-      }
-    } else {
-      base = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
-    }
-
+  // Determina a URL do WebSocket com resolução limpa para produção e rede local (LAN)
+  const resolveWsUrl = useCallback((room: string, _attempt = 0) => {
+    const base = getWsBaseUrl();
     const storedToken = typeof window !== "undefined" ? localStorage.getItem("watch_together_token") : null;
     const tokenQuery = storedToken ? `?token=${encodeURIComponent(storedToken)}` : "";
 

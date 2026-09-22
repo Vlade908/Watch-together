@@ -17,6 +17,7 @@ import {
 } from "@/types/social";
 import { CATALOG_DATA, CatalogTitle } from "@/data/mockCatalog";
 import { useAuth, getApiBaseUrl } from "./AuthContext";
+import { getWsBaseUrl } from "@/utils/network";
 
 interface SocialContextType {
   currentUser: UserPresence;
@@ -195,27 +196,9 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
-  // Resolução dinâmica de URL para conexões em dev/local/LAN
+  // Resolução limpa de URL para conexões em produção e dev/local/LAN
   const resolveSocialWsUrl = useCallback((authToken: string) => {
-    let base = "";
-    if (typeof window !== "undefined") {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = window.location.hostname || "localhost";
-      const envUrl = process.env.NEXT_PUBLIC_WS_URL;
-
-      if (envUrl) {
-        base = envUrl
-          .replace(/^http:/, "ws:")
-          .replace(/^https:/, "wss:")
-          .replace("localhost", host)
-          .replace("127.0.0.1", host);
-      } else {
-        base = `${protocol}//${host}:4000`;
-      }
-    } else {
-      base = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
-    }
-
+    const base = getWsBaseUrl();
     return `${base}/ws/social?token=${encodeURIComponent(authToken)}`;
   }, []);
 

@@ -24,18 +24,8 @@ interface AuthContextType {
   getAuthHeaders: () => Record<string, string>;
 }
 
-export const getApiBaseUrl = () => {
-  if (typeof window !== "undefined") {
-    const protocol = window.location.protocol;
-    const host = window.location.hostname || "localhost";
-    const envUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (envUrl) {
-      return envUrl.replace("localhost", host).replace("127.0.0.1", host);
-    }
-    return `${protocol}//${host}:4000`;
-  }
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-};
+import { getApiBaseUrl } from "@/utils/network";
+export { getApiBaseUrl };
 
 export const setTokenCookie = (token: string) => {
   if (typeof document !== "undefined") {
@@ -136,10 +126,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const apiBase = getApiBaseUrl();
+      const sanitized = {
+        email: credentials.email.toLowerCase().trim(),
+        password: credentials.password,
+      };
       const res = await fetch(`${apiBase}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(credentials),
+        body: JSON.stringify(sanitized),
       });
 
       const data = await res.json();
@@ -166,10 +160,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const apiBase = getApiBaseUrl();
+      const sanitized = {
+        name: userData.name.trim(),
+        email: userData.email.toLowerCase().trim(),
+        password: userData.password,
+      };
       const res = await fetch(`${apiBase}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(userData),
+        body: JSON.stringify(sanitized),
       });
 
       const data = await res.json();

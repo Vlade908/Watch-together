@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { CatalogTitle, CATALOG_DATA } from "../data/mockCatalog";
+import { getApiBaseUrl } from "@/utils/network";
 
 export interface RecommendedTitle extends CatalogTitle {
   matchReason?: string;
@@ -17,22 +18,7 @@ export function useRecommendations(userId?: string) {
   const fetchRecommendations = useCallback(async () => {
     try {
       setIsLoading(true);
-      let apiBase = "";
-      if (typeof window !== "undefined") {
-        const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-        const host = window.location.hostname || "localhost";
-        const envUrl = process.env.NEXT_PUBLIC_API_URL;
-
-        if (envUrl) {
-          apiBase = envUrl
-            .replace("localhost", host)
-            .replace("127.0.0.1", host);
-        } else {
-          apiBase = `${protocol}//${host}:4000`;
-        }
-      } else {
-        apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-      }
+      const apiBase = getApiBaseUrl();
 
       const queryUserId = userId || "usuario@watchtogether.com";
       const res = await fetch(`${apiBase}/api/recommendations?userId=${encodeURIComponent(queryUserId)}&limit=8`);

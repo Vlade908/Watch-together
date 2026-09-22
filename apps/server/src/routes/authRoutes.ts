@@ -3,14 +3,14 @@ import { z } from "zod";
 import { AuthService } from "../services/authService";
 
 const registerSchema = z.object({
-  name: z.string().min(2, "O nome deve ter no mínimo 2 caracteres").max(60),
-  email: z.string().email("Endereço de e-mail inválido"),
+  name: z.string().trim().min(2, "O nome deve ter no mínimo 2 caracteres").max(60),
+  email: z.string().trim().toLowerCase().email("Endereço de e-mail inválido"),
   password: z.string().min(6, "A senha deve ter no mínimo 6 caracteres").max(100),
   avatarUrl: z.string().url("URL de avatar inválida").optional(),
 });
 
 const loginSchema = z.object({
-  email: z.string().email("Endereço de e-mail inválido"),
+  email: z.string().trim().toLowerCase().email("Endereço de e-mail inválido"),
   password: z.string().min(1, "A senha é obrigatória"),
 });
 
