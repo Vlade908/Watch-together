@@ -92,16 +92,21 @@ export function useWatchTogetherRoom({
     if (!enabled || typeof window === "undefined") return;
     const currentPath = window.location.pathname;
 
-    if (roomState?.sourceType === "DIRECT_URL" && currentPath.includes("/watch/arquivo-local")) {
+    const isDirect =
+      roomState?.sourceType === "DIRECT_URL" ||
+      Boolean(remoteDirectUrl && !remoteDirectUrl.startsWith("blob:")) ||
+      Boolean(roomState?.directUrl && !roomState.directUrl.startsWith("blob:"));
+
+    if (isDirect && currentPath.includes("/watch/arquivo-local")) {
       const roomParam = roomId ? `?mode=room&room=${encodeURIComponent(roomId)}` : "";
       console.log(`[Watch Together Room] Migrando rota de /watch/arquivo-local para /watch/direto${roomParam}`);
       router.replace(`/watch/direto${roomParam}`);
-    } else if (roomState?.sourceType === "LOCAL_FILE" && currentPath.includes("/watch/direto")) {
+    } else if (roomState?.sourceType === "LOCAL_FILE" && !isDirect && currentPath.includes("/watch/direto")) {
       const roomParam = roomId ? `?mode=room&room=${encodeURIComponent(roomId)}` : "";
       console.log(`[Watch Together Room] Migrando rota de /watch/direto para /watch/arquivo-local${roomParam}`);
       router.replace(`/watch/arquivo-local${roomParam}`);
     }
-  }, [enabled, roomState?.sourceType, roomId, router]);
+  }, [enabled, roomState?.sourceType, roomState?.directUrl, remoteDirectUrl, roomId, router]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const clockSyncRef = useRef<ClockSyncEngine>(new ClockSyncEngine());
@@ -168,6 +173,11 @@ export function useWatchTogetherRoom({
             const message = JSON.parse(event.data) as ServerMessage;
 
             switch (message.type) {
+              case "pong": {
+                // Heartbeat mantido com sucesso contra quedas em dados móveis (CGNAT 4G/5G)
+                break;
+              }
+
               case "clock_pong": {
                 clockSyncRef.current.processClockPong(
                   message.clientSendTime,
@@ -185,23 +195,28 @@ export function useWatchTogetherRoom({
                   setRemoteDirectUrl(message.state.directUrl);
                 }
 
-                // Alinha o vídeo local com o estado inicial
+                // Alinha o vídeo local com o estado inicial apenas se houver fonte válida
                 const authoritativeTime =
                   clockSyncRef.current.calculateAuthoritativeMediaTime(message.state) ||
                   message.currentMediaTime;
 
                 if (videoRef.current) {
                   const video = videoRef.current;
-                  isLocalActionRef.current = true;
-                  video.currentTime = authoritativeTime;
-                  if (message.state.status === "PLAYING") {
-                    video.play().catch(() => {});
-                  } else {
-                    video.pause();
+                  const isBlobWithoutFile = !localFile && Boolean(video.currentSrc?.startsWith("blob:") || video.src?.startsWith("blob:"));
+                  const hasValidSource = Boolean(video.currentSrc && video.currentSrc !== window.location.href && !isBlobWithoutFile);
+
+                  if (hasValidSource) {
+                    isLocalActionRef.current = true;
+                    video.currentTime = authoritativeTime;
+                    if (message.state.status === "PLAYING") {
+                      video.play().catch(() => {});
+                    } else {
+                      video.pause();
+                    }
+                    setTimeout(() => {
+                      isLocalActionRef.current = false;
+                    }, 300);
                   }
-                  setTimeout(() => {
-                    isLocalActionRef.current = false;
-                  }, 300);
                 }
                 break;
               }
@@ -209,24 +224,30 @@ export function useWatchTogetherRoom({
               case "playback_update": {
                 setRoomState(message.state);
 
-                // Aplica a ação recebida da sala se não foi disparada localmente
+                // Aplica a ação recebida da sala se não foi disparada localmente e houver fonte válida
                 if (videoRef.current && !isLocalActionRef.current) {
-                  const authoritativeTime = clockSyncRef.current.calculateAuthoritativeMediaTime(message.state);
-                  isLocalActionRef.current = true;
+                  const video = videoRef.current;
+                  const isBlobWithoutFile = !localFile && Boolean(video.currentSrc?.startsWith("blob:") || video.src?.startsWith("blob:"));
+                  const hasValidSource = Boolean(video.currentSrc && video.currentSrc !== window.location.href && !isBlobWithoutFile);
 
-                  if (message.action === "PLAY") {
-                    videoRef.current.currentTime = authoritativeTime;
-                    videoRef.current.play().catch(() => {});
-                  } else if (message.action === "PAUSE") {
-                    videoRef.current.currentTime = message.state.referenceMediaTime;
-                    videoRef.current.pause();
-                  } else if (message.action === "SEEK") {
-                    videoRef.current.currentTime = authoritativeTime;
+                  if (hasValidSource) {
+                    const authoritativeTime = clockSyncRef.current.calculateAuthoritativeMediaTime(message.state);
+                    isLocalActionRef.current = true;
+
+                    if (message.action === "PLAY") {
+                      video.currentTime = authoritativeTime;
+                      video.play().catch(() => {});
+                    } else if (message.action === "PAUSE") {
+                      video.currentTime = message.state.referenceMediaTime;
+                      video.pause();
+                    } else if (message.action === "SEEK") {
+                      video.currentTime = authoritativeTime;
+                    }
+
+                    setTimeout(() => {
+                      isLocalActionRef.current = false;
+                    }, 300);
                   }
-
-                  setTimeout(() => {
-                    isLocalActionRef.current = false;
-                  }, 300);
                 }
                 break;
               }
@@ -266,11 +287,6 @@ export function useWatchTogetherRoom({
                 break;
               }
 
-              case "pong": {
-                // Heartbeat pong recebido com sucesso do servidor
-                break;
-              }
-
               case "error": {
                 console.warn("[Watch Together Server Alert]:", message.message);
                 break;
@@ -281,28 +297,15 @@ export function useWatchTogetherRoom({
           }
         };
 
-        const scheduleReconnect = () => {
+        ws.onclose = (event) => {
           if (isUnmounted) return;
           setIsConnected(false);
           setIsSyncing(true);
-          if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-            reconnectTimeoutRef.current = null;
-          }
-          const delay = Math.min(1500 * Math.pow(1.3, attemptCount), 8000) + Math.random() * 500;
           attemptCount++;
           console.warn(
-            `[Watch Together] Reconectando à sala '${roomId}' em ${Math.round(delay)}ms (tentativa #${attemptCount})...`
+            `[Watch Together] Conexão WebSocket encerrada (código: ${event.code}, motivo: "${event.reason || "desconexão"}"). Reconectando em 2.5s...`
           );
-          reconnectTimeoutRef.current = setTimeout(connect, delay);
-        };
-
-        ws.onclose = (event) => {
-          if (isUnmounted) return;
-          console.warn(
-            `[Watch Together] Conexão WebSocket encerrada (código: ${event.code}, motivo: "${event.reason || "desconexão"}").`
-          );
-          scheduleReconnect();
+          reconnectTimeoutRef.current = setTimeout(connect, 2500);
         };
 
         ws.onerror = (err) => {
@@ -317,12 +320,18 @@ export function useWatchTogetherRoom({
         if (isUnmounted) return;
         attemptCount++;
         console.warn(`[Watch Together] Falha ao instanciar WebSocket (${wsUrl}):`, e);
-        const delay = Math.min(1500 * Math.pow(1.3, attemptCount), 8000) + Math.random() * 500;
-        reconnectTimeoutRef.current = setTimeout(connect, delay);
+        reconnectTimeoutRef.current = setTimeout(connect, 2500);
       }
     }
 
     connect();
+
+    // Heartbeat periódico (Ping/Pong) a cada 20 segundos para manter a conexão aberta contra CGNAT (4G/5G) e proxies
+    const heartbeatInterval = setInterval(() => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 20000);
 
     // Loop contínuo de sincronização de relógio (NTP) a cada 4 segundos
     const clockInterval = setInterval(() => {
@@ -333,48 +342,10 @@ export function useWatchTogetherRoom({
       }
     }, 4000);
 
-    // Heartbeat ping contínuo a cada 12 segundos para manter viva a conexão em redes móveis (CGNAT / Render Proxy)
-    const pingInterval = setInterval(() => {
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: "ping" }));
-      }
-    }, 12000);
-
-    // Reconexão instantânea quando a aba ou app no celular volta a ficar visível
-    const handleVisibilityChange = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-          console.log("[Watch Together] Retorno à aba detectado. Verificando e restabelecendo conexão da sala...");
-          attemptCount = 0;
-          connect();
-        }
-      }
-    };
-
-    // Reconexão imediata quando a rede móvel/Wi-Fi se recupera
-    const handleOnline = () => {
-      console.log("[Watch Together] Rede restabelecida. Reconectando à sala...");
-      attemptCount = 0;
-      connect();
-    };
-
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibilityChange);
-    }
-    if (typeof window !== "undefined") {
-      window.addEventListener("online", handleOnline);
-    }
-
     return () => {
       isUnmounted = true;
+      clearInterval(heartbeatInterval);
       clearInterval(clockInterval);
-      clearInterval(pingInterval);
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", handleVisibilityChange);
-      }
-      if (typeof window !== "undefined") {
-        window.removeEventListener("online", handleOnline);
-      }
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (socketRef.current) {
         const sock = socketRef.current;
@@ -392,12 +363,14 @@ export function useWatchTogetherRoom({
         socketRef.current = null;
       }
     };
-  }, [roomId, currentUserId, currentUserName, enabled, resolveWsUrl, videoRef]);
+  }, [roomId, currentUserId, currentUserName, enabled, resolveWsUrl, videoRef, localFile]);
 
   // 1.1 Sincronização e alinhamento autoritativo quando o player de vídeo estiver pronto
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !roomState || !enabled || !isConnected) return;
+    const isBlobWithoutFile = !localFile && Boolean(video.currentSrc?.startsWith("blob:") || video.src?.startsWith("blob:"));
+    if (!video.currentSrc || video.currentSrc === window.location.href || isBlobWithoutFile) return;
 
     const syncInitialVideoState = () => {
       if (isLocalActionRef.current) return;
@@ -426,7 +399,7 @@ export function useWatchTogetherRoom({
         video.removeEventListener("canplay", syncInitialVideoState);
       };
     }
-  }, [roomState, isConnected, enabled, videoRef]);
+  }, [roomState, isConnected, enabled, videoRef, localFile]);
 
   // 2. Loop do Controlador de Drift em 3 Zonas (Executado a cada 500ms)
   useEffect(() => {
@@ -435,6 +408,8 @@ export function useWatchTogetherRoom({
     const driftInterval = setInterval(() => {
       const video = videoRef.current;
       if (!video || isLocalActionRef.current) return;
+      const isBlobWithoutFile = !localFile && Boolean(video.currentSrc?.startsWith("blob:") || video.src?.startsWith("blob:"));
+      if (!video.currentSrc || video.currentSrc === window.location.href || isBlobWithoutFile) return;
 
       const authoritativeTime = clockSyncRef.current.calculateAuthoritativeMediaTime(roomState);
       const isRoomPlaying = roomState.status === "PLAYING";
@@ -451,7 +426,7 @@ export function useWatchTogetherRoom({
     }, 500);
 
     return () => clearInterval(driftInterval);
-  }, [enabled, isConnected, roomState, videoRef]);
+  }, [enabled, isConnected, roomState, videoRef, localFile]);
 
   // Verifica se o usuário atual é o Host da sala comparando com o hostId autoritativo no Redis
   const isHost = useMemo(() => {

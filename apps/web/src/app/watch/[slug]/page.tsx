@@ -82,11 +82,13 @@ export default function WatchPage({ params }: WatchPageProps) {
     if (isPartyHost && currentParty) {
       const room = effectiveRoomId || `sala-${resolvedParams.slug}`;
       const titleToBroadcast = activeMediaTitle || catalogTitle.name;
-      if (currentParty.activeMedia?.slug !== resolvedParams.slug || currentParty.activeMedia?.roomId !== room) {
-        startPartyMedia(resolvedParams.slug, titleToBroadcast, room);
+      // Garante que para transmissões remotas o slug emitido seja sempre "direto", nunca "arquivo-local"
+      const targetSlug = isDirectUrlMode ? "direto" : isLocalFileMode ? "arquivo-local" : resolvedParams.slug;
+      if (currentParty.activeMedia?.slug !== targetSlug || currentParty.activeMedia?.roomId !== room) {
+        startPartyMedia(targetSlug, titleToBroadcast, room);
       }
     }
-  }, [isPartyHost, currentParty, resolvedParams.slug, effectiveRoomId, catalogTitle.name, activeMediaTitle, startPartyMedia]);
+  }, [isPartyHost, currentParty, resolvedParams.slug, isDirectUrlMode, isLocalFileMode, effectiveRoomId, catalogTitle.name, activeMediaTitle, startPartyMedia]);
 
   // Publica presença em tempo real na rede Watch Together
   useEffect(() => {

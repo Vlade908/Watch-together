@@ -1,6 +1,7 @@
 import { redisClient, redisSubscriber } from "../redis/client";
 import { PartySession, PartyMember, PartyInvite, SocialServerMessage } from "../types";
 import { PresenceService } from "./presenceService";
+import { RoomService } from "./roomService";
 
 const PARTY_TTL_SECONDS = 86400; // 24 horas
 
@@ -286,7 +287,32 @@ export class PartyService {
       throw new Error("Apenas o Líder do Grupo pode iniciar filmes para todos.");
     }
 
-    party.activeMedia = mediaData;
+    // Se a sala tiver directUrl configurada ou sourceType for DIRECT_URL,
+    // o evento party_navigate deve ser emitido diretamente com /watch/direto?mode=room&room=${roomId}.
+    // Nunca envie convidados para /watch/arquivo-local a menos que a fonte seja estritamente LOCAL_FILE.
+    let effectiveSlug = mediaData.slug;
+    try {
+      const roomState = mediaData.roomId ? await RoomService.getRoomState(mediaData.roomId) : null;
+      if (
+        roomState?.sourceType === "DIRECT_URL" ||
+        (roomState?.directUrl && !roomState.directUrl.startsWith("blob:")) ||
+        mediaData.slug === "direto" ||
+        mediaData.slug === "url"
+      ) {
+        effectiveSlug = "direto";
+      } else if (mediaData.slug === "arquivo-local" || roomState?.sourceType === "LOCAL_FILE") {
+        effectiveSlug = "arquivo-local";
+      }
+    } catch (err) {
+      console.warn("[PartyService] Falha ao verificar estado da sala para sanitize de slug:", err);
+    }
+
+    const sanitizedMediaData = {
+      ...mediaData,
+      slug: effectiveSlug,
+    };
+
+    party.activeMedia = sanitizedMediaData;
     party.updatedAt = Date.now();
 
     await redisClient.setex(`party:${party.id}`, PARTY_TTL_SECONDS, JSON.stringify(party));
@@ -295,9 +321,9 @@ export class PartyService {
     await this.publishPartyEvent(party.id, {
       type: "party_navigate",
       partyId: party.id,
-      slug: mediaData.slug,
-      title: mediaData.title,
-      roomId: mediaData.roomId,
+      slug: effectiveSlug,
+      title: sanitizedMediaData.title,
+      roomId: sanitizedMediaData.roomId,
       hostName: party.hostName,
     });
 

@@ -52,12 +52,15 @@ export type ClientMessage =
   | { type: "ping" };
 
 export type ServerMessage =
-  | { type: "pong"; timestamp: number }
   | {
       type: "clock_pong";
       clientSendTime: number;
       serverReceiveTime: number;
       serverSendTime: number;
+    }
+  | {
+      type: "pong";
+      timestamp?: number;
     }
   | {
       type: "room_state";

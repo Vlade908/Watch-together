@@ -172,26 +172,6 @@ export function VideoPlayer({
     ((effectiveSourceType === "DIRECT_URL" && !remoteDirectUrl) ||
       !roomState?.sourceType);
 
-  const safeDetachAndReset = useCallback(async (options: { resetVideo?: boolean } = { resetVideo: true }) => {
-    if (shakaPlayerRef.current) {
-      try {
-        if (typeof shakaPlayerRef.current.detach === "function") {
-          await shakaPlayerRef.current.detach();
-        } else {
-          await shakaPlayerRef.current.unload();
-        }
-      } catch {}
-    }
-    if (options.resetVideo && videoRef.current) {
-      try {
-        videoRef.current.pause();
-        videoRef.current.removeAttribute("src");
-        videoRef.current.srcObject = null;
-        // Não chamamos videoRef.current.load() com src vazio para evitar que o navegador dispare ERR_FILE_NOT_FOUND
-      } catch {}
-    }
-  }, []);
-
   const handleShakaError = useCallback((error: any) => {
     // 1. Silencia completamente o Shaka Error 7000 (LOAD_INTERRUPTED)
     // Ocorre quando um load() é cancelado por outro load() mais recente ou por desmontagem do componente
@@ -216,7 +196,20 @@ export function VideoPlayer({
       );
       setIsLoading(false);
       setIsBuffering(false);
-      safeDetachAndReset();
+
+      if (shakaPlayerRef.current) {
+        try {
+          if (typeof shakaPlayerRef.current.detach === "function") {
+            shakaPlayerRef.current.detach().catch(() => {});
+          } else {
+            shakaPlayerRef.current.unload().catch(() => {});
+          }
+        } catch {}
+      }
+      if (videoRef.current) {
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
       return;
     }
 
@@ -228,7 +221,20 @@ export function VideoPlayer({
       );
       setIsLoading(false);
       setIsBuffering(false);
-      safeDetachAndReset();
+
+      if (shakaPlayerRef.current) {
+        try {
+          if (typeof shakaPlayerRef.current.detach === "function") {
+            shakaPlayerRef.current.detach().catch(() => {});
+          } else {
+            shakaPlayerRef.current.unload().catch(() => {});
+          }
+        } catch {}
+      }
+      if (videoRef.current) {
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
       return;
     }
 
@@ -240,7 +246,21 @@ export function VideoPlayer({
       );
       setIsLoading(false);
       setIsBuffering(false);
-      safeDetachAndReset();
+
+      // Limpa buffer de reprodução de forma segura para evitar loops de recarga
+      if (shakaPlayerRef.current) {
+        try {
+          if (typeof shakaPlayerRef.current.detach === "function") {
+            shakaPlayerRef.current.detach().catch(() => {});
+          } else {
+            shakaPlayerRef.current.unload().catch(() => {});
+          }
+        } catch {}
+      }
+      if (videoRef.current) {
+        videoRef.current.removeAttribute("src");
+        videoRef.current.load();
+      }
       return;
     }
 
@@ -250,7 +270,7 @@ export function VideoPlayer({
       console.error("[VideoPlayer] Erro interceptado do Shaka Player:", error);
       setPlaybackError(`Erro no player (${code || "desconhecido"}): ${msg || "Falha ao decodificar stream."}`);
     }
-  }, [remoteDirectUrl, safeDetachAndReset]);
+  }, [remoteDirectUrl]);
 
   // Tentativa segura de streaming via Proxy do Servidor com verificação de conectividade upstream
   const handleTryProxy = async () => {
@@ -279,9 +299,6 @@ export function VideoPlayer({
           const errJson = await probeRes.json();
           errorDetail = errJson.message || errJson.details || errJson.error || "";
         } catch {}
-        if (probeRes.status === 404) {
-          throw new Error("HTTP 404: O link do vídeo expirou ou não foi encontrado no servidor de origem.");
-        }
         throw new Error(errorDetail || `HTTP ${probeRes.status}`);
       }
 
@@ -296,15 +313,11 @@ export function VideoPlayer({
       }
     } catch (err: any) {
       console.warn("[VideoPlayer] Falha ao conectar via Proxy do Servidor:", err);
-      const is404 = err?.message?.includes("404");
       setPlaybackError(
-        is404
-          ? "O servidor de origem retornou HTTP 404 (Não Encontrado). O token temporário deste link expirou ou o vídeo foi removido pelo provedor."
-          : "Não foi possível carregar via proxy: o link remoto expirou ou não respondeu (Erro Upstream)."
+        "Não foi possível carregar via proxy: o link remoto expirou ou não respondeu (Erro Upstream)."
       );
       setIsLoading(false);
       setIsBuffering(false);
-      safeDetachAndReset();
     } finally {
       setIsProxyLoading(false);
     }
@@ -478,9 +491,10 @@ export function VideoPlayer({
         } else {
           // Arquivo local pendente de seleção: NUNCA carrega Shaka ou Demo e NUNCA atribui blob/src vazio!
           if (videoRef.current) {
-            videoRef.current.pause();
-            videoRef.current.removeAttribute("src");
-            videoRef.current.srcObject = null;
+            if (videoRef.current.src || videoRef.current.getAttribute("src")) {
+              videoRef.current.removeAttribute("src");
+              videoRef.current.load();
+            }
           }
           setIsLoading(false);
           setDuration(0);
@@ -582,9 +596,8 @@ export function VideoPlayer({
           }
           setAvailableResolutions([]);
           if (videoRef.current) {
-            videoRef.current.pause();
             videoRef.current.removeAttribute("src");
-            videoRef.current.srcObject = null;
+            videoRef.current.load();
           }
           setIsLoading(true);
         }
@@ -623,6 +636,12 @@ export function VideoPlayer({
         if (!player || !isMounted || currentSeq !== loadSequenceRef.current) {
           setIsLoading(false);
           return;
+        }
+
+        // Limpa src nativo para evitar conflito com MSE
+        if (videoRef.current) {
+          videoRef.current.removeAttribute("src");
+          videoRef.current.load();
         }
 
         await player.load(targetManifest);

@@ -3,6 +3,7 @@ import { FastifyRequest } from "fastify";
 import { RoomService } from "../services/roomService";
 import { PubSubService } from "../services/pubsubService";
 import { PresenceService } from "../services/presenceService";
+import { PartyService } from "../services/partyService";
 import { ClientMessage, ServerMessage, RoomMember, MediaSourceType } from "../types";
 import { SocketRateLimiter } from "./socketRateLimiter";
 import { isValidMediaUrl } from "../utils/urlValidator";
@@ -23,6 +24,13 @@ export function handleRoomWebSocket(
 
   let currentMember: RoomMember | null = null;
   let isAlive = true;
+
+  // Heartbeat do WebSocket para blindagem contra timeouts e quedas 1006 em redes móveis (CGNAT 4G/5G)
+  const heartbeatInterval = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.ping();
+    }
+  }, 20000);
 
   // Envia mensagem tipada com segurança
   const send = (msg: ServerMessage) => {
@@ -67,13 +75,7 @@ export function handleRoomWebSocket(
     console.error(`[${errTs}] [WS /ws/rooms/${roomId}] [WS Error]:`, err.message);
   });
 
-  // Heartbeat do socket a cada 20 segundos para prevenir encerramento por NATs e proxies em redes móveis (Código 1006)
-  const heartbeatInterval = setInterval(() => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.ping();
-    }
-  }, 20000);
-
+  // Heartbeat do socket
   socket.on("pong", () => {
     isAlive = true;
   });
@@ -89,7 +91,7 @@ export function handleRoomWebSocket(
       const parsed = JSON.parse(data.toString()) as ClientMessage;
 
       switch (parsed.type) {
-        // 0. Keep-alive ping do cliente
+        // 0. Heartbeat Ping da Sala (blindagem contra timeouts e quedas 1006 em redes móveis CGNAT 4G/5G)
         case "ping": {
           send({ type: "pong", timestamp: Date.now() });
           break;
@@ -172,12 +174,26 @@ export function handleRoomWebSocket(
           });
 
           // 6. Atualiza lista global de salas ativas no Redis
+          const isDirect =
+            state.sourceType === "DIRECT_URL" ||
+            Boolean(state.directUrl && !state.directUrl.startsWith("blob:"));
+
+          const activeMediaSlug =
+            isDirect
+              ? "direto"
+              : state.sourceType === "LOCAL_FILE"
+              ? "arquivo-local"
+              : state.mediaId;
+
           const activeTitleName =
-            state.sourceType === "LOCAL_FILE"
-              ? state.mediaTitle || "Ficheiro Local (Syncplay)"
+            state.mediaTitle ||
+            (state.sourceType === "LOCAL_FILE"
+              ? "Ficheiro Local (Syncplay)"
+              : isDirect
+              ? "URL Direta (Transmissão Remota)"
               : state.mediaId === "interestelar-alem-do-horizonte"
               ? "Interestelar: Além do Horizonte"
-              : state.mediaId;
+              : state.mediaId);
 
           const activeBannerUrl =
             state.sourceType === "LOCAL_FILE"
@@ -186,10 +202,10 @@ export function handleRoomWebSocket(
 
           await PresenceService.registerActiveRoom({
             roomId,
-            mediaId: state.mediaId,
+            mediaId: activeMediaSlug,
             titleName: activeTitleName,
             bannerUrl: activeBannerUrl,
-            slug: state.mediaId,
+            slug: activeMediaSlug,
             hostName: state.hostName || currentMember.userName,
             participantsCount: members.length,
             maxParticipants: 10,
@@ -380,6 +396,20 @@ export function handleRoomWebSocket(
                 ? "Original Local (0 buffer)"
                 : "Ultra HD (Sub-50ms sync)",
           });
+
+          // Sincroniza Follow-the-Host na Watch Party ativa caso o anfitrião lidere uma
+          try {
+            const userParty = await PartyService.getUserParty(currentMember.userId);
+            if (userParty && userParty.hostId === currentMember.userId) {
+              await PartyService.startMedia(currentMember.userId, {
+                slug: activeMediaSlug,
+                title: activeTitleName,
+                roomId,
+              });
+            }
+          } catch (partyErr: any) {
+            console.debug(`[WS /ws/rooms/${roomId}] Sincronização de party no set_media_source ignorada:`, partyErr.message);
+          }
           break;
         }
 
@@ -423,9 +453,9 @@ export function handleRoomWebSocket(
 
   // Limpeza na desconexão
   socket.on("close", async (code, reason) => {
+    clearInterval(heartbeatInterval);
     const closeTs = new Date().toISOString();
     console.log(`[${closeTs}] [WS /ws/rooms/${roomId}] [WS Close] Código: ${code}, Motivo: ${reason?.toString() || "desconexão normal"}`);
-    clearInterval(heartbeatInterval);
     unsubscribe();
     if (currentMember) {
       const remaining = await RoomService.removeMember(roomId, currentMember.userId);

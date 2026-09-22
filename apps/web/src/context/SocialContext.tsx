@@ -376,8 +376,12 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               }
 
               case "party_navigate": {
-                console.log(`[Watch Party] Sincronização de navegação do Host ${data.hostName} -> /watch/${data.slug}?mode=room&room=${data.roomId}`);
-                router.push(`/watch/${data.slug}?mode=room&room=${data.roomId}`);
+                const targetSlug =
+                  data.slug === "direto" || data.slug === "url"
+                    ? "direto"
+                    : data.slug;
+                console.log(`[Watch Party] Sincronização de navegação do Host ${data.hostName} -> /watch/${targetSlug}?mode=room&room=${data.roomId}`);
+                router.push(`/watch/${targetSlug}?mode=room&room=${data.roomId}`);
                 break;
               }
             }
