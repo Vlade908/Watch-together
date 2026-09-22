@@ -20,11 +20,11 @@ export default function WatchPage({ params }: WatchPageProps) {
   const { updatePresence, isPartyHost, currentParty, startPartyMedia } = useSocial();
   const { user } = useAuth();
 
-  const isLocalFileMode =
-    resolvedParams.slug === "arquivo-local" || searchParams.get("source") === "local";
-
   const isDirectUrlMode =
-    resolvedParams.slug === "direto" || resolvedParams.slug === "url";
+    resolvedParams.slug === "direto" || resolvedParams.slug === "url" || searchParams.get("source") === "direct";
+
+  const isLocalFileMode =
+    !isDirectUrlMode && (resolvedParams.slug === "arquivo-local" || searchParams.get("source") === "local");
 
   const isRoomMode = searchParams.get("mode") === "room";
   const roomParam = searchParams.get("room");
@@ -120,7 +120,13 @@ export default function WatchPage({ params }: WatchPageProps) {
   return (
     <main className="w-screen h-screen bg-black overflow-hidden relative">
       <VideoPlayer
-        manifestUrl={isLocalFileMode || isDirectUrlMode ? "" : DEMO_HLS_STREAM}
+        manifestUrl={
+          isLocalFileMode
+            ? ""
+            : isDirectUrlMode
+            ? searchParams.get("url") || DEMO_HLS_STREAM
+            : DEMO_HLS_STREAM
+        }
         titleName={activeMediaTitle || titleFormatted}
         episodeName={
           isLocalFileMode

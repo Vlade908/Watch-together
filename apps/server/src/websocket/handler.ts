@@ -116,7 +116,6 @@ export function handleRoomWebSocket(
 
           const isLocalRoom =
             parsed.initialSourceType === "LOCAL_FILE" ||
-            roomId.includes("local") ||
             roomId.includes("arquivo-local");
 
           const defaultMediaId = isLocalRoom ? "arquivo-local" : "interestelar-alem-do-horizonte";

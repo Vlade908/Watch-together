@@ -25,6 +25,8 @@ import {
   UserMinus,
   Ban,
   AlertTriangle,
+  Globe,
+  RotateCcw,
 } from "lucide-react";
 import { CATALOG_DATA, CatalogTitle } from "@/data/mockCatalog";
 import { useSocial } from "@/context/SocialContext";
@@ -68,7 +70,8 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
   const [isLaunchingRoom, setIsLaunchingRoom] = useState(false);
 
   const [selectedMovieForRoom, setSelectedMovieForRoom] = useState<CatalogTitle>(CATALOG_DATA[0]);
-  const [createSourceMode, setCreateSourceMode] = useState<"catalog" | "local">("catalog");
+  const [createSourceMode, setCreateSourceMode] = useState<"direct" | "catalog" | "local">("direct");
+  const [directUrlInput, setDirectUrlInput] = useState("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8");
   const [roomType, setRoomType] = useState<"friends" | "public">("friends");
   const [hostOnlyControls, setHostOnlyControls] = useState(true);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -241,9 +244,10 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
   const handleLaunchRoom = async (
     targetRoomId: string,
     targetSlug: string,
-    sourceType: "LOCAL_FILE" | "CATALOG_DEMO",
+    sourceType: "LOCAL_FILE" | "CATALOG_DEMO" | "DIRECT_URL",
     mediaTitle?: string,
-    extraQuery?: string
+    extraQuery?: string,
+    directUrl?: string
   ) => {
     setIsLaunchingRoom(true);
     try {
@@ -259,7 +263,18 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
           roomId: targetRoomId,
           mediaId: targetSlug,
           sourceType,
-          mediaTitle: mediaTitle || (sourceType === "LOCAL_FILE" ? "Ficheiro Local (Syncplay)" : undefined),
+          mediaTitle:
+            mediaTitle ||
+            (sourceType === "LOCAL_FILE"
+              ? "Ficheiro Local (Syncplay)"
+              : sourceType === "DIRECT_URL"
+              ? "URL Direta (Transmissão Remota)"
+              : undefined),
+          directUrl:
+            directUrl ||
+            (sourceType === "DIRECT_URL"
+              ? "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+              : undefined),
         }),
       });
     } catch (e) {
@@ -268,7 +283,8 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
       setIsLaunchingRoom(false);
       onClose();
       const query = extraQuery ? `&${extraQuery}` : "";
-      router.push(`/watch/${targetSlug}?mode=room&room=${targetRoomId}${query}`);
+      const urlQuery = directUrl ? `&url=${encodeURIComponent(directUrl)}` : "";
+      router.push(`/watch/${targetSlug}?mode=room&room=${targetRoomId}${query}${urlQuery}`);
     }
   };
 
@@ -1069,33 +1085,112 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                 <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider block">
                   Modalidade da Sala (BYOM)
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    onClick={() => setCreateSourceMode("direct")}
+                    className={`py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all cursor-pointer ${
+                      createSourceMode === "direct"
+                        ? "bg-[#E50914] border-[#E50914] text-white shadow-md shadow-[#E50914]/20"
+                        : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5 flex-none" />
+                    <span className="truncate">URL Direta</span>
+                  </button>
                   <button
                     onClick={() => setCreateSourceMode("catalog")}
-                    className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
+                    className={`py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all cursor-pointer ${
                       createSourceMode === "catalog"
                         ? "bg-[#E50914] border-[#E50914] text-white shadow-md shadow-[#E50914]/20"
                         : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
                     }`}
                   >
-                    <Film className="w-3.5 h-3.5" />
-                    <span>Catálogo Demo</span>
+                    <Film className="w-3.5 h-3.5 flex-none" />
+                    <span className="truncate">Catálogo Demo</span>
                   </button>
                   <button
                     onClick={() => setCreateSourceMode("local")}
-                    className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer ${
+                    className={`py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all cursor-pointer ${
                       createSourceMode === "local"
                         ? "bg-[#E50914] border-[#E50914] text-white shadow-md shadow-[#E50914]/20"
                         : "bg-[#202020] border-white/5 text-neutral-400 hover:text-white"
                     }`}
                   >
-                    <FileVideo className="w-3.5 h-3.5" />
-                    <span>Ficheiro Local</span>
+                    <FileVideo className="w-3.5 h-3.5 flex-none" />
+                    <span className="truncate">Ficheiro Local</span>
                   </button>
                 </div>
               </div>
 
-              {/* Modo 1: Catálogo */}
+              {/* Modo 1: URL Direta (Transmissão Remota) - Padrão */}
+              {createSourceMode === "direct" && (
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-300 text-xs space-y-1">
+                    <p className="font-bold flex items-center space-x-1.5 text-white">
+                      <Globe className="w-4 h-4 text-sky-400" />
+                      <span>Transmissão Remota (Padrão)</span>
+                    </p>
+                    <p className="text-[11px] text-neutral-300 leading-relaxed">
+                      Inicie uma sala conectada a um stream HLS (.m3u8), MP4 ou WebM. Todos os participantes assistirão à mesma fonte online com sincronização em tempo real.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider block">
+                      URL do Stream (HLS .m3u8 ou MP4):
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="url"
+                        value={directUrlInput}
+                        onChange={(e) => setDirectUrlInput(e.target.value)}
+                        placeholder="https://.../manifest.m3u8"
+                        className="w-full bg-[#181818] border border-white/15 focus:border-[#E50914] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 outline-none transition-colors pr-16 font-mono"
+                      />
+                      {directUrlInput && (
+                        <button
+                          type="button"
+                          onClick={() => setDirectUrlInput("")}
+                          className="absolute right-2 px-2 py-1 text-[10px] text-neutral-400 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors cursor-pointer"
+                        >
+                          Limpar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setDirectUrlInput("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")}
+                    className="w-full py-2 px-3 bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white rounded-lg text-[11px] font-medium flex items-center justify-center space-x-1.5 transition-colors cursor-pointer border border-white/5"
+                  >
+                    <RotateCcw className="w-3 h-3 text-[#38bdf8]" />
+                    <span>Restaurar Stream de Teste Mux ABR</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const roomCode = `sala-${Math.random().toString(36).substring(2, 8)}`;
+                      const finalUrl = directUrlInput.trim() || "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+                      handleLaunchRoom(
+                        roomCode,
+                        "direto",
+                        "DIRECT_URL",
+                        "Transmissão Remota",
+                        "source=direct",
+                        finalUrl
+                      );
+                    }}
+                    disabled={isLaunchingRoom}
+                    className="w-full py-3.5 px-4 bg-gradient-to-r from-[#E50914] to-[#ff2b36] hover:from-[#c20812] hover:to-[#e50914] text-white font-bold rounded-xl shadow-lg shadow-[#E50914]/30 transition-all flex items-center justify-center space-x-2 text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>{isLaunchingRoom ? "Criando Sala..." : "Iniciar Sala (Transmissão Direta)"}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Modo 2: Catálogo */}
               {createSourceMode === "catalog" && (
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
@@ -1139,7 +1234,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                 </div>
               )}
 
-              {/* Modo 2: Ficheiro Local (Syncplay Web) */}
+              {/* Modo 3: Ficheiro Local (Syncplay Web) - Exclusivo para quando o usuário escolhe explicitamente */}
               {createSourceMode === "local" && (
                 <div className="space-y-3">
                   <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs space-y-1">
@@ -1160,7 +1255,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                         localCode,
                         "arquivo-local",
                         "LOCAL_FILE",
-                        "Ficheiro Local (Syncplay)",
+                        "Assistir Arquivo do Meu Computador (Syncplay)",
                         "source=local"
                       );
                     }}
@@ -1168,7 +1263,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                     className="w-full py-3.5 px-4 bg-gradient-to-r from-[#00d26a] to-[#00b057] hover:from-[#00b057] hover:to-[#009147] text-black font-bold rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center space-x-2 text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50"
                   >
                     <FileVideo className="w-4 h-4" />
-                    <span>{isLaunchingRoom ? "Criando Sala..." : "Iniciar Sala (Ficheiro Local)"}</span>
+                    <span>{isLaunchingRoom ? "Criando Sala..." : "Assistir Arquivo do Meu Computador (Syncplay)"}</span>
                   </button>
                 </div>
               )}

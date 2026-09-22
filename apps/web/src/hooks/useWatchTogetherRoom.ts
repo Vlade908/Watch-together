@@ -31,7 +31,7 @@ export function useWatchTogetherRoom({
 
   const computedInitialSourceType: MediaSourceType = useMemo(() => {
     if (initialSourceType) return initialSourceType;
-    if (roomId.includes("local") || roomId.includes("arquivo-local")) return "LOCAL_FILE";
+    if (roomId.includes("arquivo-local")) return "LOCAL_FILE";
     if (roomId.includes("direto") || roomId.includes("url")) return "DIRECT_URL";
     return "CATALOG_DEMO";
   }, [initialSourceType, roomId]);
@@ -191,8 +191,14 @@ export function useWatchTogetherRoom({
               case "room_state": {
                 setRoomState(message.state);
                 setMembers(message.members);
-                if (message.state.directUrl && !message.state.directUrl.startsWith("blob:")) {
+                if (
+                  message.state.sourceType === "DIRECT_URL" &&
+                  message.state.directUrl &&
+                  !message.state.directUrl.startsWith("blob:")
+                ) {
                   setRemoteDirectUrl(message.state.directUrl);
+                } else if (message.state.sourceType !== "DIRECT_URL") {
+                  setRemoteDirectUrl(null);
                 }
 
                 // Alinha o vídeo local com o estado inicial apenas se houver fonte válida
@@ -254,9 +260,15 @@ export function useWatchTogetherRoom({
 
               case "source_updated": {
                 setRoomState(message.state);
-                const newDirectUrl = message.directUrl || message.state.directUrl;
-                if (newDirectUrl && !newDirectUrl.startsWith("blob:")) {
-                  setRemoteDirectUrl(newDirectUrl);
+                if (message.state.sourceType === "DIRECT_URL") {
+                  const newDirectUrl = message.directUrl || message.state.directUrl;
+                  if (newDirectUrl && !newDirectUrl.startsWith("blob:")) {
+                    setRemoteDirectUrl(newDirectUrl);
+                  } else {
+                    setRemoteDirectUrl(null);
+                  }
+                } else {
+                  setRemoteDirectUrl(null);
                 }
                 break;
               }
@@ -534,6 +546,19 @@ export function useWatchTogetherRoom({
         safeDirectUrl = undefined;
       }
 
+      // Atualiza o estado local imediatamente para evitar loops com URLs antigas
+      if (sourceType === "DIRECT_URL") {
+        setRemoteDirectUrl(safeDirectUrl || null);
+        setRoomState((prev) =>
+          prev ? { ...prev, sourceType: "DIRECT_URL", directUrl: safeDirectUrl, mediaTitle: options?.mediaTitle } : null
+        );
+      } else {
+        setRemoteDirectUrl(null);
+        setRoomState((prev) =>
+          prev ? { ...prev, sourceType, directUrl: undefined, mediaTitle: options?.mediaTitle } : null
+        );
+      }
+
       send({
         type: "set_media_source",
         sourceType,
@@ -544,6 +569,18 @@ export function useWatchTogetherRoom({
     },
     [send, isHost]
   );
+
+  const clearMediaSource = useCallback(() => {
+    if (!isHost) return;
+    setRemoteDirectUrl(null);
+    setRoomState((prev) => (prev ? { ...prev, directUrl: undefined } : null));
+    send({
+      type: "set_media_source",
+      sourceType: "DIRECT_URL",
+      directUrl: undefined,
+      mediaTitle: undefined,
+    });
+  }, [send, isHost]);
 
   const registerLocalFile = useCallback((file: File, fingerprint: string) => {
     setLocalFile(file);
@@ -564,12 +601,16 @@ export function useWatchTogetherRoom({
     contentFingerprint: roomState?.contentFingerprint,
     mediaTitle: roomState?.mediaTitle,
     remoteDirectUrl:
-      (roomState?.directUrl && !roomState.directUrl.startsWith("blob:") ? roomState.directUrl : undefined) ||
-      (remoteDirectUrl && !remoteDirectUrl.startsWith("blob:") ? remoteDirectUrl : undefined),
+      remoteDirectUrl && !remoteDirectUrl.startsWith("blob:")
+        ? remoteDirectUrl
+        : roomState?.sourceType === "DIRECT_URL" && roomState?.directUrl && !roomState.directUrl.startsWith("blob:")
+        ? roomState.directUrl
+        : undefined,
     localFingerprint,
     localFile,
     hashMatchStatus,
     changeMediaSource,
+    clearMediaSource,
     registerLocalFile,
     sendPlay,
     sendPause,

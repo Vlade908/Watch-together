@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Search, Bell, Users, ChevronDown, X, Film, LogOut, Settings, User } from "lucide-react";
+import { Search, Bell, Users, ChevronDown, X, Film, LogOut, Settings, User, Plus } from "lucide-react";
 import { SocialDrawer } from "./SocialDrawer";
 import { useSocial } from "@/context/SocialContext";
 import { useAuth } from "@/context/AuthContext";
@@ -167,6 +167,17 @@ export function Navbar() {
                 <Users className="w-4 h-4 text-[#38bdf8] group-hover:scale-110 transition-transform" />
                 <span>Watch Together</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-[#00d26a]" title="Salas ativas disponíveis" />
+              </button>
+              <button
+                onClick={() => {
+                  setSocialDrawerTab("create");
+                  setIsSocialDrawerOpen(true);
+                }}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-[#E50914]/20 hover:bg-[#E50914]/35 border border-[#E50914]/40 text-white font-semibold text-xs transition-all cursor-pointer shadow-sm"
+                title="Criar Nova Sala"
+              >
+                <Plus className="w-3.5 h-3.5 text-[#E50914]" />
+                <span>Criar Sala</span>
               </button>
             </nav>
           </div>
@@ -343,7 +354,18 @@ export function Navbar() {
                       <p className="text-neutral-400 text-[11px] truncate">{authUser.email}</p>
                     </div>
 
-                    <div className="px-2 py-1">
+                    <div className="px-2 py-1 space-y-0.5">
+                      <button
+                        onClick={() => {
+                          setShowProfileMenu(false);
+                          setSocialDrawerTab("create");
+                          setIsSocialDrawerOpen(true);
+                        }}
+                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded text-neutral-300 hover:text-white hover:bg-white/10 transition-colors text-left cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4 text-[#E50914]" />
+                        <span>Criar Sala</span>
+                      </button>
                       <button
                         onClick={() => {
                           setShowProfileMenu(false);

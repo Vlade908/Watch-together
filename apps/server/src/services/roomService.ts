@@ -98,7 +98,6 @@ export class RoomService {
 
     const isLocalRoom =
       defaultSourceType === "LOCAL_FILE" ||
-      roomId.includes("local") ||
       roomId.includes("arquivo-local") ||
       defaultMediaId === "arquivo-local";
 

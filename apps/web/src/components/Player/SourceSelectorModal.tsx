@@ -32,6 +32,7 @@ interface SourceSelectorModalProps {
   currentMediaTitle?: string;
   onSelectLocalFile: (file: File, fingerprint: string, title?: string) => void;
   onSelectDirectUrl?: (url: string, title?: string) => void;
+  onClearDirectUrl?: () => void;
   onSelectCatalogDemo?: () => void;
 }
 
@@ -45,6 +46,7 @@ export function SourceSelectorModal({
   currentMediaTitle,
   onSelectLocalFile,
   onSelectDirectUrl,
+  onClearDirectUrl,
   onSelectCatalogDemo,
 }: SourceSelectorModalProps) {
   // Abas: "LOCAL_FILE", "DIRECT_URL", "CATALOG_DEMO"
@@ -54,6 +56,16 @@ export function SourceSelectorModal({
   useEffect(() => {
     setActiveTab(currentSourceType);
   }, [currentSourceType]);
+
+  // Sincroniza campos de URL com a URL ativa caso existam
+  useEffect(() => {
+    if (isOpen && remoteDirectUrl && !remoteDirectUrl.startsWith("blob:") && !directUrlInput) {
+      setDirectUrlInput(remoteDirectUrl);
+    }
+    if (isOpen && currentMediaTitle && !directTitleInput) {
+      setDirectTitleInput(currentMediaTitle);
+    }
+  }, [isOpen, remoteDirectUrl, currentMediaTitle]);
 
   // Estados do Arquivo Local
   const [dragActive, setDragActive] = useState(false);
@@ -458,6 +470,31 @@ export function SourceSelectorModal({
                   </div>
 
                   <div className="space-y-2">
+                    {/* Banner de URL Ativa na Sala com botão de Limpar */}
+                    {remoteDirectUrl && (
+                      <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/10 text-xs">
+                        <div className="truncate max-w-[280px]">
+                          <span className="text-neutral-400 block text-[10px]">URL Ativa na Sala:</span>
+                          <span className="text-[#38bdf8] font-mono text-[11px] truncate block">{remoteDirectUrl}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectUrlInput("");
+                            setDirectTitleInput("");
+                            setUrlError("");
+                            if (onClearDirectUrl) {
+                              onClearDirectUrl();
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg text-[11px] font-medium transition-colors cursor-pointer flex items-center space-x-1"
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Limpar da Sala</span>
+                        </button>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between">
                       <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider block">
                         URL Direta do Vídeo (HTTPS)
@@ -474,19 +511,36 @@ export function SourceSelectorModal({
                         Preencher stream HLS de teste
                       </button>
                     </div>
-                    <input
-                      type="url"
-                      placeholder="https://exemplo.com/meu-video.mp4"
-                      value={directUrlInput}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setDirectUrlInput(val);
-                        if (val && !directTitleInput.trim()) {
-                          setDirectTitleInput(extractCleanMediaTitle(val));
-                        }
-                      }}
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-white/15 focus:border-[#E50914] focus:outline-none text-xs text-white placeholder-neutral-500 font-mono"
-                    />
+
+                    <div className="relative">
+                      <input
+                        type="url"
+                        placeholder="https://exemplo.com/meu-video.mp4"
+                        value={directUrlInput}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setDirectUrlInput(val);
+                          if (val && !directTitleInput.trim()) {
+                            setDirectTitleInput(extractCleanMediaTitle(val));
+                          }
+                        }}
+                        className="w-full px-3.5 py-2.5 pr-20 rounded-xl bg-black/50 border border-white/15 focus:border-[#E50914] focus:outline-none text-xs text-white placeholder-neutral-500 font-mono"
+                      />
+                      {directUrlInput && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectUrlInput("");
+                            setUrlError("");
+                          }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-300 hover:text-white text-[10px] transition-colors cursor-pointer flex items-center space-x-1"
+                          title="Limpar campo de URL"
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Limpar</span>
+                        </button>
+                      )}
+                    </div>
                     {urlError && <p className="text-[11px] text-red-400">{urlError}</p>}
                   </div>
 
@@ -502,6 +556,24 @@ export function SourceSelectorModal({
                       className="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-white/15 focus:border-[#E50914] focus:outline-none text-xs text-white placeholder-neutral-500"
                     />
                   </div>
+
+                  {/* Botão de 1 Clique: Preencher e Aplicar Test Stream Oficial */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const testUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+                      const testTitle = "Big Buck Bunny (HLS ABR Oficial)";
+                      setDirectUrlInput(testUrl);
+                      setDirectTitleInput(testTitle);
+                      setUrlError("");
+                      onSelectDirectUrl?.(testUrl, testTitle);
+                      onClose();
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-[#38bdf8]/15 hover:bg-[#38bdf8]/25 border border-[#38bdf8]/30 text-[#38bdf8] font-semibold text-xs transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-sm"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Preencher & Aplicar Stream de Teste (Mux ABR)</span>
+                  </button>
 
                   <button
                     onClick={handleConfirmDirectUrl}

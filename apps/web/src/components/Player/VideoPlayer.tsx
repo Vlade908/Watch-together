@@ -94,6 +94,7 @@ export function VideoPlayer({
     localFile,
     hashMatchStatus,
     changeMediaSource,
+    clearMediaSource,
     registerLocalFile,
     sendPlay,
     sendPause,
@@ -107,6 +108,11 @@ export function VideoPlayer({
     initialSourceType,
     mediaTitle: titleName,
   });
+
+  // Identifica se a rota atual é de transmissão direta (/watch/direto)
+  const isDirectRoute =
+    typeof window !== "undefined" &&
+    (window.location.pathname.includes("/watch/direto") || window.location.pathname.includes("/watch/url"));
 
   // Estados de Playback
   const [isPlaying, setIsPlaying] = useState(false);
@@ -126,9 +132,11 @@ export function VideoPlayer({
   const currentDriverRef = useRef<IMediaSourceDriver | null>(null);
   const loadSequenceRef = useRef<number>(0);
 
-  // Prioriza URL remota direta caso a sala possua directUrl válida configurada
+  // Prioriza rota direta ou URL remota direta caso a sala possua directUrl válida configurada
   const hasRemoteDirectUrl = Boolean(remoteDirectUrl && !remoteDirectUrl.startsWith("blob:"));
-  const effectiveSourceType: MediaSourceType = hasRemoteDirectUrl
+  const effectiveSourceType: MediaSourceType = isDirectRoute
+    ? "DIRECT_URL"
+    : hasRemoteDirectUrl
     ? "DIRECT_URL"
     : (sourceType || initialSourceType || "CATALOG_DEMO");
 
@@ -458,7 +466,8 @@ export function VideoPlayer({
       }
 
       // Caso 1: Modo Ficheiro Local (Syncplay Web)
-      if (isWatchTogether && effectiveSourceType === "LOCAL_FILE") {
+      // Se a rota for /watch/direto, NUNCA executa o modo local e NUNCA instancia LocalFileDriver
+      if (!isDirectRoute && isWatchTogether && effectiveSourceType === "LOCAL_FILE") {
         setPlaybackError(null);
         setAvailableResolutions([]);
         if (shakaPlayerRef.current) {
@@ -505,10 +514,11 @@ export function VideoPlayer({
       }
 
       // Caso 2: Modo URL Direta / Nuvem Pessoal
-      if (isWatchTogether && effectiveSourceType === "DIRECT_URL") {
+      if ((isWatchTogether && effectiveSourceType === "DIRECT_URL") || isDirectRoute) {
         const targetUrl =
           remoteDirectUrl ||
-          (manifestUrl && !manifestUrl.includes("stream.mux.com") ? manifestUrl : "");
+          (manifestUrl && !manifestUrl.includes("stream.mux.com") ? manifestUrl : "") ||
+          "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
 
         if (targetUrl) {
           // Proteção contra URLs blob: originadas de outras máquinas
@@ -1405,6 +1415,23 @@ export function VideoPlayer({
           }
         }}
         onSelectDirectUrl={(url, title) => {
+          if (currentDriverRef.current) {
+            currentDriverRef.current.detach().catch(() => {});
+            currentDriverRef.current = null;
+          }
+          if (shakaPlayerRef.current) {
+            try {
+              if (typeof shakaPlayerRef.current.detach === "function") {
+                shakaPlayerRef.current.detach().catch(() => {});
+              } else {
+                shakaPlayerRef.current.unload().catch(() => {});
+              }
+            } catch {}
+          }
+          setPlaybackError(null);
+          setIsLoading(true);
+          loadSequenceRef.current++;
+
           if (isHost) {
             changeMediaSource("DIRECT_URL", {
               directUrl: url,
@@ -1415,6 +1442,25 @@ export function VideoPlayer({
               router.push(`/watch/direto${roomQuery}`);
             }
           }
+        }}
+        onClearDirectUrl={() => {
+          if (currentDriverRef.current) {
+            currentDriverRef.current.detach().catch(() => {});
+            currentDriverRef.current = null;
+          }
+          if (shakaPlayerRef.current) {
+            try {
+              if (typeof shakaPlayerRef.current.detach === "function") {
+                shakaPlayerRef.current.detach().catch(() => {});
+              } else {
+                shakaPlayerRef.current.unload().catch(() => {});
+              }
+            } catch {}
+          }
+          setPlaybackError(null);
+          setIsLoading(false);
+          loadSequenceRef.current++;
+          clearMediaSource();
         }}
         onSelectCatalogDemo={() => {
           if (isHost) {
