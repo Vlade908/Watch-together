@@ -145,7 +145,18 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     };
   }, [searchQuery, isAuthenticated, searchUsers]);
 
-  if (!mounted || !isOpen) return null;
+  // Lista ordenada alfabeticamente para a aba "Todos"
+  const sortedAllFriends = React.useMemo(() => {
+    return [...friends].sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
+  }, [friends]);
+
+  const filteredAllFriends = React.useMemo(() => {
+    if (!allFriendsSearchQuery.trim()) return sortedAllFriends;
+    const q = allFriendsSearchQuery.toLowerCase();
+    return sortedAllFriends.filter(
+      (f: any) => (f.name || "").toLowerCase().includes(q) || (f.email || "").toLowerCase().includes(q)
+    );
+  }, [sortedAllFriends, allFriendsSearchQuery]);
 
   const copyInviteLink = (code: string, slug?: string) => {
     const targetSlug = slug || selectedMovieForRoom.slug;
@@ -215,19 +226,6 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     }
   };
 
-  // Lista ordenada alfabeticamente para a aba "Todos"
-  const sortedAllFriends = React.useMemo(() => {
-    return [...friends].sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
-  }, [friends]);
-
-  const filteredAllFriends = React.useMemo(() => {
-    if (!allFriendsSearchQuery.trim()) return sortedAllFriends;
-    const q = allFriendsSearchQuery.toLowerCase();
-    return sortedAllFriends.filter(
-      (f: any) => (f.name || "").toLowerCase().includes(q) || (f.email || "").toLowerCase().includes(q)
-    );
-  }, [sortedAllFriends, allFriendsSearchQuery]);
-
   const newGeneratedRoomCode = `sala-${selectedMovieForRoom.slug}-${Math.random().toString(36).substring(2, 6)}`;
 
   const handleLaunchRoom = async (
@@ -263,6 +261,8 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
       router.push(`/watch/${targetSlug}?mode=room&room=${targetRoomId}${query}`);
     }
   };
+
+  if (!mounted || !isOpen) return null;
 
   return (
     <div className="select-none">
