@@ -14,9 +14,7 @@
     "db:seed": "node dist/seed.js"
   },
   "dependencies": {
-    "@prisma/client": "^6.4.1"
-  },
-  "devDependencies": {
+    "@prisma/client": "^6.4.1",
     "prisma": "^6.4.1",
     "typescript": "^5.7.3"
   }
