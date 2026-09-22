@@ -28,8 +28,8 @@ declare module "fastify" {
 
 dotenv.config();
 
-const PORT = parseInt(process.env.PORT || "4000", 10);
-const HOST = process.env.HOST || "::";
+const PORT = Number(process.env.PORT) || 4000;
+const HOST = process.env.HOST || "0.0.0.0";
 
 // VULN-11: Bloqueio estrito de segredos JWT inseguros/padrão em ambiente de produção
 const jwtSecret = process.env.JWT_SECRET || "super-secret-watch-together-key-change-in-production";
@@ -284,23 +284,15 @@ async function main() {
     );
   });
 
-  // 5. Inicialização do servidor com dual-stack (IPv6 + IPv4) resiliente
+  // 5. Inicialização do servidor com binding em 0.0.0.0 (obrigatório para containers e Render)
   try {
     const address = await fastify.listen({ port: PORT, host: HOST });
     console.log(`\n🚀 [Watch Together Gateway] Servidor Fastify ativo em ${address}`);
-    console.log(`🔌 [WebSockets] Endpoint salas: ws://localhost:${PORT}/ws/rooms/:roomId`);
-    console.log(`🔌 [WebSockets] Endpoint social: ws://localhost:${PORT}/ws/social\n`);
+    console.log(`🔌 [WebSockets] Endpoint salas: ws://${HOST}:${PORT}/ws/rooms/:roomId`);
+    console.log(`🔌 [WebSockets] Endpoint social: ws://${HOST}:${PORT}/ws/social\n`);
   } catch (err: any) {
-    if (HOST === "::") {
-      console.warn(`[Fastify] IPv6 '::' falhou (${err.message}). Tentando fallback em '0.0.0.0'...`);
-      const address = await fastify.listen({ port: PORT, host: "0.0.0.0" });
-      console.log(`\n🚀 [Watch Together Gateway] Servidor Fastify ativo em ${address}`);
-      console.log(`🔌 [WebSockets] Endpoint salas: ws://localhost:${PORT}/ws/rooms/:roomId`);
-      console.log(`🔌 [WebSockets] Endpoint social: ws://localhost:${PORT}/ws/social\n`);
-    } else {
-      fastify.log.error(err);
-      process.exit(1);
-    }
+    fastify.log.error(err);
+    process.exit(1);
   }
 }
 

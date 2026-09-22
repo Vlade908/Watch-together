@@ -19,6 +19,7 @@
     "db:studio": "npm run db:studio --workspace=@watch-together/database",
     "server:dev": "npm run dev --workspace=@watch-together/server",
     "server:build": "npm run build --workspace=@watch-together/server",
+    "server:start": "npm run start --workspace=@watch-together/server",
     "ml:compile": "python3 -m py_compile watch-together-ml/src/*.py watch-together-ml/src/**/*.py",
     "ml:dev": "watch-together-ml/.venv/Scripts/uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --app-dir watch-together-ml",
     "ml:retrain": "powershell -Command \"Invoke-RestMethod -Method POST -Uri 'http://localhost:8000/retrain'\""
