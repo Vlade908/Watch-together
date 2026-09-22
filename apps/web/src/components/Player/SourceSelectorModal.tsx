@@ -132,6 +132,13 @@ export function SourceSelectorModal({
       return;
     }
 
+    if (trimmed.startsWith("blob:")) {
+      setUrlError(
+        "URLs 'blob:' pertencem apenas à máquina local e não podem ser compartilhadas com a sala. Para arquivos do seu computador, utilize a aba 'Arquivo Local' (Syncplay)."
+      );
+      return;
+    }
+
     try {
       const parsed = new URL(trimmed);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {

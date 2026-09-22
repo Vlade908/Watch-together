@@ -17,6 +17,7 @@ import jwt from "@fastify/jwt";
 import { authRoutes } from "./routes/authRoutes";
 import { friendRoutes } from "./routes/friendRoutes";
 import { roomRoutes } from "./routes/roomRoutes";
+import { proxyRoutes } from "./routes/proxyRoutes";
 
 import { PartyService } from "./services/partyService";
 
@@ -258,10 +259,11 @@ async function main() {
     return { titles };
   });
 
-  // 6. Rotas de Autenticação, Gestão de Amizades e Salas Síncronas
+  // 6. Rotas de Autenticação, Gestão de Amizades, Salas Síncronas e Proxy de Mídia
   await fastify.register(authRoutes, { prefix: "/api/auth" });
   await fastify.register(friendRoutes, { prefix: "/api/friends" });
   await fastify.register(roomRoutes, { prefix: "/api/rooms" });
+  await fastify.register(proxyRoutes, { prefix: "/api/proxy" });
 
   // 7. Rotas WebSocket com captura dinâmica e suporte a subprotocolos
   fastify.register(async function (fastifyInstance) {

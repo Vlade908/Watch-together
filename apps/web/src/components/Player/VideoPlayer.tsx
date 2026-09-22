@@ -24,6 +24,7 @@ import {
 import Link from "next/link";
 import { useWatchTogetherRoom } from "@/hooks/useWatchTogetherRoom";
 import { MediaSourceType } from "@/types/sync";
+import { getApiBaseUrl } from "@/context/AuthContext";
 import { SyncHUD } from "./SyncHUD";
 import { SourceSelectorModal } from "./SourceSelectorModal";
 import {
@@ -176,15 +177,20 @@ export function VideoPlayer({
     if (code === 1002 || category === 1 || isShakaNetworkError(error)) {
       console.warn("[VideoPlayer] Falha de conexão ao stream (Shaka Error 1002 / HTTP Inválido / CORS):", msg || error);
       setPlaybackError(
-        "Não foi possível conectar ao stream. O link informado está offline, expirou (HTTP 404) ou não permite reprodução direta."
+        "Não foi possível carregar o vídeo. O servidor de origem bloqueia reprodução externa (CORS) ou o link expirou."
       );
-      // Limpa buffer de reprodução de forma segura
+      setIsLoading(false);
+      setIsBuffering(false);
+
+      // Limpa buffer de reprodução de forma segura para evitar loops de recarga
       if (shakaPlayerRef.current) {
-        if (typeof shakaPlayerRef.current.detach === "function") {
-          shakaPlayerRef.current.detach().catch(() => {});
-        } else {
-          shakaPlayerRef.current.unload().catch(() => {});
-        }
+        try {
+          if (typeof shakaPlayerRef.current.detach === "function") {
+            shakaPlayerRef.current.detach().catch(() => {});
+          } else {
+            shakaPlayerRef.current.unload().catch(() => {});
+          }
+        } catch {}
       }
       if (videoRef.current) {
         videoRef.current.removeAttribute("src");
@@ -290,6 +296,14 @@ export function VideoPlayer({
             segmentPrefetchLimit: 2, // Pré-busca concorrente de segmentos à frente
             stallEnabled: true,
             stallThreshold: 1,
+            retryParameters: {
+              maxAttempts: 1, // Evita loop infinito de tentativas de rede em caso de falha de CORS ou 404
+            },
+          },
+          manifest: {
+            retryParameters: {
+              maxAttempts: 1, // Limita tentativas no manifesto para evitar loop
+            },
           },
           abr: {
             enabled: true,
@@ -379,6 +393,17 @@ export function VideoPlayer({
           (manifestUrl && !manifestUrl.includes("stream.mux.com") ? manifestUrl : "");
 
         if (targetUrl) {
+          // Proteção contra URLs blob: originadas de outras máquinas
+          if (targetUrl.startsWith("blob:") && !localFile) {
+            console.warn("[VideoPlayer] URL blob: remota detectada. Bloqueando carregamento no Shaka Player.");
+            setPlaybackError(
+              "O anfitrião selecionou um arquivo local ('blob:'). Arquivos locais devem ser carregados individualmente por cada participante em seu próprio computador (modo Syncplay) ou enviados via catálogo."
+            );
+            setIsLoading(false);
+            setIsBuffering(false);
+            return;
+          }
+
           setIsLoading(true);
           setPlaybackError(null);
           try {
@@ -476,6 +501,15 @@ export function VideoPlayer({
         }
         setAvailableResolutions([]);
         setIsLoading(false);
+        return;
+      }
+
+      if (targetManifest.startsWith("blob:") && !localFile) {
+        setPlaybackError(
+          "Arquivos locais ('blob:') não podem ser carregados via URL de rede. Cada participante deve selecionar seu próprio arquivo local (modo Syncplay) ou o anfitrião deve utilizar um título do catálogo."
+        );
+        setIsLoading(false);
+        setIsBuffering(false);
         return;
       }
 
@@ -894,7 +928,7 @@ export function VideoPlayer({
                 </button>
               </div>
               <p className="text-neutral-300 leading-relaxed">{playbackError}</p>
-              <div className="flex items-center space-x-2 pt-1">
+              <div className="flex flex-wrap items-center gap-2 pt-1">
                 {isHost && (
                   <button
                     onClick={() => {
@@ -903,16 +937,44 @@ export function VideoPlayer({
                     }}
                     className="py-1.5 px-3 rounded-lg bg-[#E50914] hover:bg-[#ff2b36] text-white font-semibold text-[11px] transition-colors cursor-pointer shadow-md shadow-[#E50914]/20 flex items-center space-x-1.5"
                   >
-                    <span>Trocar Link / Fonte</span>
+                    <span>Tentar outra URL</span>
                   </button>
                 )}
+                {playbackError.includes("CORS") && effectiveSourceType === "DIRECT_URL" && remoteDirectUrl && !remoteDirectUrl.includes("/api/proxy/manifest") && (
+                  <button
+                    onClick={() => {
+                      setPlaybackError(null);
+                      setIsLoading(true);
+                      const apiBase = getApiBaseUrl();
+                      const proxied = `${apiBase}/api/proxy/manifest?url=${encodeURIComponent(remoteDirectUrl)}`;
+                      if (isHost) {
+                        changeMediaSource("DIRECT_URL", {
+                          directUrl: proxied,
+                          mediaTitle: displayTitle,
+                        });
+                      } else {
+                        loadSequenceRef.current++;
+                      }
+                    }}
+                    className="py-1.5 px-3 rounded-lg bg-blue-600/80 hover:bg-blue-600 text-white font-semibold text-[11px] transition-colors cursor-pointer flex items-center space-x-1.5"
+                  >
+                    <span>Tentar via Proxy do Servidor</span>
+                  </button>
+                )}
+                <Link
+                  href="/"
+                  className="py-1.5 px-3 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 hover:text-white font-medium text-[11px] transition-colors cursor-pointer flex items-center space-x-1"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 mr-1" />
+                  <span>Voltar ao Catálogo</span>
+                </Link>
                 <button
                   onClick={() => {
                     setPlaybackError(null);
                     setIsLoading(true);
                     loadSequenceRef.current++;
                   }}
-                  className="py-1.5 px-3 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 hover:text-white font-medium text-[11px] transition-colors cursor-pointer"
+                  className="py-1.5 px-3 rounded-lg bg-white/5 hover:bg-white/15 text-neutral-300 hover:text-white font-medium text-[11px] transition-colors cursor-pointer"
                 >
                   Tentar Novamente
                 </button>

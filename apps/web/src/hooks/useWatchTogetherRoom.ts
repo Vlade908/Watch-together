@@ -162,7 +162,11 @@ export function useWatchTogetherRoom({
                 setRoomState(message.state);
                 setMembers(message.members);
                 if (message.state.directUrl) {
-                  setRemoteDirectUrl(message.state.directUrl);
+                  if (message.state.directUrl.startsWith("blob:") && !isHost) {
+                    console.warn("[Watch Together Room] URL blob: remota ignorada para participante.");
+                  } else {
+                    setRemoteDirectUrl(message.state.directUrl);
+                  }
                 }
 
                 // Alinha o vídeo local com o estado inicial
@@ -215,7 +219,11 @@ export function useWatchTogetherRoom({
                 setRoomState(message.state);
                 const newDirectUrl = message.directUrl || message.state.directUrl;
                 if (newDirectUrl) {
-                  setRemoteDirectUrl(newDirectUrl);
+                  if (newDirectUrl.startsWith("blob:") && !isHost) {
+                    console.warn("[Watch Together Room] URL blob: remota ignorada em source_updated para participante.");
+                  } else {
+                    setRemoteDirectUrl(newDirectUrl);
+                  }
                 }
                 break;
               }
@@ -471,12 +479,22 @@ export function useWatchTogetherRoom({
         console.warn("[Watch Together Room] Apenas o Host tem permissão para alterar a fonte de mídia.");
         return;
       }
+
+      // Proteção: Nunca transmite URLs blob: originadas na máquina local para os peers
+      let safeDirectUrl = options?.directUrl;
+      if (safeDirectUrl?.startsWith("blob:")) {
+        console.warn(
+          "[Watch Together Room] URLs 'blob:' pertencem exclusivamente ao navegador local e não podem ser transmitidas para outros peers."
+        );
+        safeDirectUrl = undefined;
+      }
+
       send({
         type: "set_media_source",
         sourceType,
         contentFingerprint: options?.contentFingerprint,
         mediaTitle: options?.mediaTitle,
-        directUrl: options?.directUrl,
+        directUrl: safeDirectUrl,
       });
     },
     [send, isHost]
