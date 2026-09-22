@@ -51,8 +51,11 @@ interface SocialContextType {
   sendFriendRequest: (targetUserId: string) => Promise<{ success: boolean; message?: string }>;
   acceptFriendRequest: (friendshipId: string) => Promise<{ success: boolean; message?: string }>;
   declineFriendRequest: (friendshipId: string) => Promise<{ success: boolean; message?: string }>;
+  removeFriend: (friendshipId: string) => Promise<{ success: boolean; message?: string }>;
+  blockUser: (targetUserId: string) => Promise<{ success: boolean; message?: string }>;
   searchUsers: (query: string) => Promise<FriendUser[]>;
   fetchFriends: () => Promise<void>;
+  onlineFriends: any[];
   // Party Actions
   createParty: () => void;
   inviteToParty: (targetUserId: string) => void;
@@ -477,6 +480,59 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [token, fetchFriends]
   );
 
+  const removeFriend = useCallback(
+    async (friendshipId: string) => {
+      if (!token) return { success: false, message: "Você precisa estar logado." };
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/friends/remove`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ friendshipId }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          fetchFriends();
+          return { success: true, message: "Amizade desfeita com sucesso." };
+        }
+        return { success: false, message: data.error || data.message || "Erro ao desfazer amizade." };
+      } catch {
+        return { success: false, message: "Falha de comunicação com o servidor." };
+      }
+    },
+    [token, fetchFriends]
+  );
+
+  const blockUser = useCallback(
+    async (targetUserId: string) => {
+      if (!token) return { success: false, message: "Você precisa estar logado." };
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/friends/block`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ targetUserId }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setRealOnlineUsers((prev) => prev.filter((u) => u.userId !== targetUserId));
+          fetchFriends();
+          return { success: true, message: "Usuário bloqueado com sucesso." };
+        }
+        return { success: false, message: data.error || data.message || "Erro ao bloquear usuário." };
+      } catch {
+        return { success: false, message: "Falha de comunicação com o servidor." };
+      }
+    },
+    [token, fetchFriends]
+  );
+
   const searchUsers = useCallback(
     async (query: string): Promise<FriendUser[]> => {
       if (!token || !query.trim()) return [];
@@ -612,8 +668,32 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [send]
   );
 
-  // Amigos online: combina usuários reais com fallback
-  const onlineUsers = realOnlineUsers.length > 0 ? realOnlineUsers : FALLBACK_MOCK_FRIENDS;
+  // Amigos online: cruza amigos confirmados (friends) com sessões ativas (realOnlineUsers)
+  const onlineFriends = React.useMemo(() => {
+    return friends
+      .filter((friend: any) => realOnlineUsers.some((u) => u.userId === (friend.id || friend.userId)))
+      .map((friend: any) => {
+        const friendId = friend.id || friend.userId;
+        const presence = realOnlineUsers.find((u) => u.userId === friendId);
+        return {
+          ...friend,
+          userId: friendId,
+          userName: friend.name || presence?.userName || "Amigo",
+          avatarColor: presence?.avatarColor || "bg-[#E50914]",
+          initials: presence?.initials || (friend.name ? friend.name.substring(0, 2).toUpperCase() : "AM"),
+          status: presence?.status || ("idle" as const),
+          watchingTitle: presence?.watchingTitle,
+          roomId: presence?.roomId,
+          device: presence?.device || "Web",
+          lastSeen: presence?.lastSeen || Date.now(),
+          isOnline: true,
+        };
+      });
+  }, [friends, realOnlineUsers]);
+
+  // Amigos online: exibe amigos confirmados online (fallback de mock apenas se NEXT_PUBLIC_USE_MOCKS === "true")
+  const useMocks = process.env.NEXT_PUBLIC_USE_MOCKS === "true";
+  const onlineUsers = onlineFriends.length > 0 ? onlineFriends : (useMocks ? FALLBACK_MOCK_FRIENDS : []);
 
   // Salas ativas: combina salas reais mapeadas para o catálogo com fallback
   const activeRooms: ActiveRoom[] =
@@ -641,6 +721,7 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       value={{
         currentUser,
         onlineUsers,
+        onlineFriends,
         activeRooms,
         invitations,
         unreadInvitesCount,
@@ -666,6 +747,8 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         sendFriendRequest,
         acceptFriendRequest,
         declineFriendRequest,
+        removeFriend,
+        blockUser,
         searchUsers,
         fetchFriends,
         createParty,

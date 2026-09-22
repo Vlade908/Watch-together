@@ -65,6 +65,8 @@ export interface FriendUser {
   name: string;
   email: string;
   avatarUrl?: string | null;
+  friendshipStatus?: "NONE" | "FRIENDS" | "PENDING_SENT" | "PENDING_RECEIVED";
+  friendshipId?: string;
 }
 
 export interface FriendshipItem {
@@ -78,7 +80,7 @@ export interface FriendshipItem {
 }
 
 export interface FriendNotification {
-  type: "friend_request_received" | "friend_request_accepted" | "friend_removed";
+  type: "friend_request_received" | "friend_request_accepted" | "friend_removed" | "friend_blocked";
   friendshipId: string;
   fromUser: {
     userId: string;

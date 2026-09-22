@@ -19,6 +19,19 @@ const declineFriendSchema = z.object({
   friendshipId: z.string().uuid("ID de solicitação inválido"),
 });
 
+const removeFriendSchema = z
+  .object({
+    friendshipId: z.string().uuid("ID de amizade inválido").optional(),
+    targetUserId: z.string().uuid("ID de usuário inválido").optional(),
+  })
+  .refine((data) => data.friendshipId || data.targetUserId, {
+    message: "É necessário informar friendshipId ou targetUserId.",
+  });
+
+const blockUserSchema = z.object({
+  targetUserId: z.string().uuid("ID de usuário inválido"),
+});
+
 export async function friendRoutes(fastify: FastifyInstance) {
   // Todas as rotas de amizades exigem autenticação JWT
   fastify.addHook("preHandler", fastify.authenticate);
@@ -109,6 +122,62 @@ export async function friendRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       const status = err.statusCode || 500;
       const message = status === 500 ? "Erro interno ao gerenciar amizade." : err.message;
+      return reply.status(status).send({ error: message });
+    }
+  });
+
+  // POST /api/friends/remove - Remove amizade existente
+  fastify.post("/remove", async (req: any, reply) => {
+    const parseResult = removeFriendSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: "Dados inválidos",
+        details: parseResult.error.errors.map((e) => e.message),
+      });
+    }
+
+    try {
+      const userId = req.user.sub;
+      const result = await FriendService.removeFriend(userId, parseResult.data);
+      return reply.send(result);
+    } catch (err: any) {
+      const status = err.statusCode || 500;
+      const message = status === 500 ? "Erro interno ao remover amigo." : err.message;
+      return reply.status(status).send({ error: message });
+    }
+  });
+
+  // DELETE /api/friends/:friendshipId - Remove amizade por ID
+  fastify.delete<{ Params: { friendshipId: string } }>("/:friendshipId", async (req: any, reply) => {
+    try {
+      const userId = req.user.sub;
+      const friendshipId = req.params.friendshipId;
+      const result = await FriendService.removeFriend(userId, { friendshipId });
+      return reply.send(result);
+    } catch (err: any) {
+      const status = err.statusCode || 500;
+      const message = status === 500 ? "Erro interno ao remover amigo." : err.message;
+      return reply.status(status).send({ error: message });
+    }
+  });
+
+  // POST /api/friends/block - Bloqueia um usuário
+  fastify.post("/block", async (req: any, reply) => {
+    const parseResult = blockUserSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: "Dados inválidos",
+        details: parseResult.error.errors.map((e) => e.message),
+      });
+    }
+
+    try {
+      const userId = req.user.sub;
+      const result = await FriendService.blockUser(userId, parseResult.data.targetUserId);
+      return reply.send(result);
+    } catch (err: any) {
+      const status = err.statusCode || 500;
+      const message = status === 500 ? "Erro interno ao bloquear usuário." : err.message;
       return reply.status(status).send({ error: message });
     }
   });

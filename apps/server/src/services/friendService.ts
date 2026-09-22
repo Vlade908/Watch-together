@@ -63,6 +63,11 @@ export class FriendService {
     });
 
     if (existingDirect) {
+      if (existingDirect.status === "BLOCKED") {
+        const error: any = new Error("Não é possível enviar solicitação para este usuário.");
+        error.statusCode = 403;
+        throw error;
+      }
       if (existingDirect.status === "ACCEPTED") {
         const error: any = new Error("Vocês já são amigos.");
         error.statusCode = 409;
@@ -105,6 +110,11 @@ export class FriendService {
     });
 
     if (reverseRequest) {
+      if (reverseRequest.status === "BLOCKED") {
+        const error: any = new Error("Não é possível enviar solicitação para este usuário.");
+        error.statusCode = 403;
+        throw error;
+      }
       if (reverseRequest.status === "PENDING") {
         // Ambas as partes solicitaram -> Aceita atomicamente!
         const accepted = await prisma.friendship.update({
@@ -244,6 +254,137 @@ export class FriendService {
   }
 
   /**
+   * Remove vínculo de amizade (por friendshipId ou targetUserId)
+   */
+  public static async removeFriend(userId: string, target: { friendshipId?: string; targetUserId?: string }) {
+    let friendship;
+    if (target.friendshipId) {
+      friendship = await prisma.friendship.findUnique({
+        where: { id: target.friendshipId },
+      });
+    } else if (target.targetUserId) {
+      friendship = await prisma.friendship.findFirst({
+        where: {
+          status: "ACCEPTED",
+          OR: [
+            { senderId: userId, receiverId: target.targetUserId },
+            { senderId: target.targetUserId, receiverId: userId },
+          ],
+        },
+      });
+    }
+
+    if (!friendship) {
+      const error: any = new Error("Relação de amizade não encontrada.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (friendship.senderId !== userId && friendship.receiverId !== userId) {
+      const error: any = new Error("Você não tem permissão para remover esta amizade.");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    await prisma.friendship.delete({
+      where: { id: friendship.id },
+    });
+
+    const otherUserId = friendship.senderId === userId ? friendship.receiverId : friendship.senderId;
+    await PresenceService.sendFriendNotification(otherUserId, {
+      type: "friend_removed",
+      friendshipId: friendship.id,
+      fromUser: {
+        userId,
+        name: "Usuário",
+        email: "",
+      },
+      timestamp: Date.now(),
+    });
+
+    return { status: "REMOVED" };
+  }
+
+  /**
+   * Bloqueia um usuário (muda relação para BLOCKED com senderId sendo quem bloqueou)
+   */
+  public static async blockUser(userId: string, targetUserId: string) {
+    if (userId === targetUserId) {
+      const error: any = new Error("Você não pode bloquear a si mesmo.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true },
+    });
+    if (!targetUser) {
+      const error: any = new Error("Usuário destinatário não encontrado.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    // Busca se já existe relação em qualquer direção
+    const existing = await prisma.friendship.findFirst({
+      where: {
+        OR: [
+          { senderId: userId, receiverId: targetUserId },
+          { senderId: targetUserId, receiverId: userId },
+        ],
+      },
+    });
+
+    let blockedRecord;
+    if (existing) {
+      blockedRecord = await prisma.friendship.update({
+        where: { id: existing.id },
+        data: {
+          senderId: userId,
+          receiverId: targetUserId,
+          status: "BLOCKED",
+        },
+      });
+    } else {
+      blockedRecord = await prisma.friendship.create({
+        data: {
+          senderId: userId,
+          receiverId: targetUserId,
+          status: "BLOCKED",
+        },
+      });
+    }
+
+    // Notifica o outro usuário via Redis para desvincular em tempo real
+    await PresenceService.sendFriendNotification(targetUserId, {
+      type: "friend_blocked",
+      friendshipId: blockedRecord.id,
+      fromUser: {
+        userId,
+        name: "Usuário",
+        email: "",
+      },
+      timestamp: Date.now(),
+    });
+
+    return { status: "BLOCKED", friendship: blockedRecord };
+  }
+
+  /**
+   * Retorna os IDs de todos os amigos com status ACCEPTED do usuário
+   */
+  public static async getFriendUserIds(userId: string): Promise<string[]> {
+    const relations = await prisma.friendship.findMany({
+      where: {
+        status: "ACCEPTED",
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      select: { senderId: true, receiverId: true },
+    });
+    return relations.map((r) => (r.senderId === userId ? r.receiverId : r.senderId));
+  }
+
+  /**
    * Lista todos os amigos aceitos e solicitações pendentes do usuário
    */
   public static async listFriendsAndRequests(userId: string) {
@@ -317,16 +458,29 @@ export class FriendService {
   }
 
   /**
-   * Busca usuários por nome ou email (excluindo o usuário autenticado)
+   * Busca usuários por nome ou email (excluindo o usuário autenticado e bloqueados)
    * e indica o status de amizade atual
    */
   public static async searchUsers(userId: string, query: string) {
     const cleanQuery = query.trim();
     if (!cleanQuery) return [];
 
+    // Exclui usuários envolvidos em relações BLOCKED
+    const blockedRelations = await prisma.friendship.findMany({
+      where: {
+        status: "BLOCKED",
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      select: { senderId: true, receiverId: true },
+    });
+    const blockedUserIds = blockedRelations.map((r) =>
+      r.senderId === userId ? r.receiverId : r.senderId
+    );
+    const excludedIds = [userId, ...blockedUserIds];
+
     const users = await prisma.user.findMany({
       where: {
-        id: { not: userId },
+        id: { notIn: excludedIds },
         OR: [
           { name: { contains: cleanQuery, mode: "insensitive" } },
           { email: { contains: cleanQuery, mode: "insensitive" } },

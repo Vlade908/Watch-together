@@ -239,7 +239,7 @@ export interface PartyInvite {
 }
 
 export interface FriendNotification {
-  type: "friend_request_received" | "friend_request_accepted" | "friend_removed";
+  type: "friend_request_received" | "friend_request_accepted" | "friend_removed" | "friend_blocked";
   friendshipId: string;
   fromUser: {
     userId: string;

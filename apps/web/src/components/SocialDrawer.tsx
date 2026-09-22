@@ -21,6 +21,10 @@ import {
   ShieldCheck,
   FileVideo,
   Film,
+  MoreVertical,
+  UserMinus,
+  Ban,
+  AlertTriangle,
 } from "lucide-react";
 import { CATALOG_DATA, CatalogTitle } from "@/data/mockCatalog";
 import { useSocial } from "@/context/SocialContext";
@@ -37,6 +41,7 @@ interface SocialDrawerProps {
 export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: SocialDrawerProps) {
   const {
     onlineUsers,
+    onlineFriends,
     activeRooms,
     sendInvite,
     currentUser,
@@ -46,6 +51,8 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
     sendFriendRequest,
     acceptFriendRequest,
     declineFriendRequest,
+    removeFriend,
+    blockUser,
     searchUsers,
     fetchFriends,
     inviteToParty,
@@ -57,7 +64,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
 
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<"friends" | "rooms" | "create">(defaultTab);
-  const [friendSubTab, setFriendSubTab] = useState<"online" | "requests" | "search">("online");
+  const [friendSubTab, setFriendSubTab] = useState<"online" | "all" | "requests" | "search">("online");
   const [isLaunchingRoom, setIsLaunchingRoom] = useState(false);
 
   const [selectedMovieForRoom, setSelectedMovieForRoom] = useState<CatalogTitle>(CATALOG_DATA[0]);
@@ -72,6 +79,17 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
   const [searchResults, setSearchResults] = useState<FriendUser[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<{ [key: string]: string }>({});
+
+  // Gestão de menu de opções do amigo e confirmação de desamigar/bloquear
+  const [allFriendsSearchQuery, setAllFriendsSearchQuery] = useState("");
+  const [activeMenuFriendId, setActiveMenuFriendId] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    type: "remove" | "block";
+    friendId: string;
+    friendshipId?: string;
+    name: string;
+  } | null>(null);
+  const [isConfirming, setIsConfirming] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -178,6 +196,37 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
       return next;
     });
   };
+
+  const handleConfirmAction = async () => {
+    if (!confirmAction) return;
+    setIsConfirming(true);
+    try {
+      if (confirmAction.type === "remove") {
+        if (confirmAction.friendshipId) {
+          await removeFriend(confirmAction.friendshipId);
+        }
+      } else if (confirmAction.type === "block") {
+        await blockUser(confirmAction.friendId);
+      }
+      setConfirmAction(null);
+      setActiveMenuFriendId(null);
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
+  // Lista ordenada alfabeticamente para a aba "Todos"
+  const sortedAllFriends = React.useMemo(() => {
+    return [...friends].sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
+  }, [friends]);
+
+  const filteredAllFriends = React.useMemo(() => {
+    if (!allFriendsSearchQuery.trim()) return sortedAllFriends;
+    const q = allFriendsSearchQuery.toLowerCase();
+    return sortedAllFriends.filter(
+      (f: any) => (f.name || "").toLowerCase().includes(q) || (f.email || "").toLowerCase().includes(q)
+    );
+  }, [sortedAllFriends, allFriendsSearchQuery]);
 
   const newGeneratedRoomCode = `sala-${selectedMovieForRoom.slug}-${Math.random().toString(36).substring(2, 6)}`;
 
@@ -306,64 +355,147 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
           {/* ================= ABA 1: AMIGOS & AMIZADES ================= */}
           {activeTab === "friends" && (
             <div className="space-y-4">
-              {/* Sub-abas de Amigos */}
-              <div className="flex p-1 bg-[#202020] rounded-xl text-xs">
+              {/* Diálogo de Confirmação Inline */}
+              {confirmAction && (
+                <div className="p-4 rounded-xl bg-[#2a1717] border border-red-500/30 text-white space-y-3 animate-in fade-in duration-200">
+                  <div className="flex items-start space-x-3">
+                    <div className="w-8 h-8 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center flex-none">
+                      <AlertTriangle className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-bold text-white">
+                        {confirmAction.type === "remove" ? "Desfazer Amizade" : "Bloquear Usuário"}
+                      </h4>
+                      <p className="text-[11px] text-neutral-300 mt-0.5 leading-relaxed">
+                        {confirmAction.type === "remove"
+                          ? `Tem certeza de que deseja remover ${confirmAction.name} da sua lista de amigos?`
+                          : `Tem certeza de que deseja bloquear ${confirmAction.name}? Vocês não poderão mais ver a presença nem interagir um com o outro.`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end space-x-2 pt-1">
+                    <button
+                      onClick={() => setConfirmAction(null)}
+                      disabled={isConfirming}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-300 text-xs font-semibold cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={handleConfirmAction}
+                      disabled={isConfirming}
+                      className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                    >
+                      {isConfirming && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                      <span>{confirmAction.type === "remove" ? "Remover" : "Bloquear"}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-abas de Amigos: 4 Abas (Online, Todos, Pedidos, Adicionar) */}
+              <div className="grid grid-cols-4 p-1 bg-[#202020] rounded-xl text-xs gap-1">
                 <button
-                  onClick={() => setFriendSubTab("online")}
-                  className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
-                    friendSubTab === "online" ? "bg-[#2d2d2d] text-white shadow" : "text-neutral-400 hover:text-white"
+                  onClick={() => {
+                    setFriendSubTab("online");
+                    setActiveMenuFriendId(null);
+                  }}
+                  className={`py-1.5 rounded-lg font-medium transition-all cursor-pointer text-center ${
+                    friendSubTab === "online" ? "bg-[#2d2d2d] text-white shadow font-semibold" : "text-neutral-400 hover:text-white"
                   }`}
                 >
-                  Conectados ({onlineUsers.length})
+                  Online ({onlineUsers.length})
                 </button>
+
                 <button
-                  onClick={() => setFriendSubTab("requests")}
-                  className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer relative ${
-                    friendSubTab === "requests" ? "bg-[#2d2d2d] text-white shadow" : "text-neutral-400 hover:text-white"
+                  onClick={() => {
+                    setFriendSubTab("all");
+                    setActiveMenuFriendId(null);
+                  }}
+                  className={`py-1.5 rounded-lg font-medium transition-all cursor-pointer text-center ${
+                    friendSubTab === "all" ? "bg-[#2d2d2d] text-white shadow font-semibold" : "text-neutral-400 hover:text-white"
                   }`}
                 >
-                  Pedidos
+                  Todos ({friends.length})
+                </button>
+
+                <button
+                  onClick={() => {
+                    setFriendSubTab("requests");
+                    setActiveMenuFriendId(null);
+                  }}
+                  className={`py-1.5 rounded-lg font-medium transition-all cursor-pointer text-center relative ${
+                    friendSubTab === "requests" ? "bg-[#2d2d2d] text-white shadow font-semibold" : "text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  <span>Pedidos</span>
                   {unreadRequestsCount > 0 && (
                     <span className="ml-1 px-1.5 py-0.2 bg-[#E50914] text-white text-[10px] font-bold rounded-full">
                       {unreadRequestsCount}
                     </span>
                   )}
                 </button>
+
                 <button
-                  onClick={() => setFriendSubTab("search")}
-                  className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
-                    friendSubTab === "search" ? "bg-[#2d2d2d] text-white shadow" : "text-neutral-400 hover:text-white"
+                  onClick={() => {
+                    setFriendSubTab("search");
+                    setActiveMenuFriendId(null);
+                  }}
+                  className={`py-1.5 rounded-lg font-medium transition-all cursor-pointer text-center ${
+                    friendSubTab === "search" ? "bg-[#2d2d2d] text-white shadow font-semibold" : "text-neutral-400 hover:text-white"
                   }`}
                 >
                   Adicionar
                 </button>
               </div>
 
-              {/* Sub-aba 1: Amigos Online */}
+              {/* ================= SUB-ABA 1: AMIGOS ONLINE ================= */}
               {friendSubTab === "online" && (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs text-neutral-400">
-                    <span>Membros ativos em tempo real</span>
+                    <span>Amigos ativos em tempo real</span>
                     <span className="text-[#00d26a] flex items-center gap-1 font-medium">
                       <span className="w-2 h-2 rounded-full bg-[#00d26a] animate-pulse" /> {onlineUsers.length} online
                     </span>
                   </div>
 
                   {onlineUsers.length === 0 ? (
-                    <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-xl border border-white/5">
-                      Nenhum outro amigo conectado no momento. Convide amigos ou compartilhe o link de uma sala!
+                    <div className="p-8 text-center bg-[#1e1e1e] rounded-2xl border border-white/5 space-y-3">
+                      <div className="w-12 h-12 rounded-full bg-[#E50914]/10 border border-[#E50914]/20 flex items-center justify-center mx-auto text-[#E50914]">
+                        <Users className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm font-bold text-white">Nenhum amigo online no momento</p>
+                        <p className="text-xs text-neutral-400 max-w-xs mx-auto">
+                          Seus amigos confirmados aparecerão aqui quando estiverem navegando ou assistindo a um título.
+                        </p>
+                      </div>
+                      <div className="pt-2 flex justify-center gap-2">
+                        <button
+                          onClick={() => setFriendSubTab("search")}
+                          className="px-4 py-2 rounded-xl bg-[#E50914] hover:bg-[#E50914]/85 text-white text-xs font-bold transition-all cursor-pointer"
+                        >
+                          Buscar Amigos
+                        </button>
+                        <button
+                          onClick={() => setFriendSubTab("all")}
+                          className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-200 text-xs font-semibold transition-all cursor-pointer"
+                        >
+                          Ver Todos ({friends.length})
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     onlineUsers.map((friend) => (
                       <div
                         key={friend.userId}
-                        className="p-3.5 rounded-xl bg-[#1e1e1e] border border-white/5 hover:border-white/15 transition-all space-y-2.5"
+                        className="p-3.5 rounded-xl bg-[#1e1e1e] border border-white/5 hover:border-white/15 transition-all space-y-2.5 relative"
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-3">
                             <div className="relative">
                               <div
-                                className={`w-9 h-9 rounded-full ${friend.avatarColor || "bg-neutral-700"} text-white font-bold text-xs flex items-center justify-center shadow`}
+                                className={`w-9 h-9 rounded-full ${friend.avatarColor || "bg-[#E50914]"} text-white font-bold text-xs flex items-center justify-center shadow`}
                               >
                                 {friend.initials || friend.userName.substring(0, 2).toUpperCase()}
                               </div>
@@ -377,9 +509,62 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                             </div>
                           </div>
 
-                          <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-[#00d26a]/10 text-[#00d26a] border border-[#00d26a]/30">
-                            {friend.status === "watching" ? "Assistindo" : "Online"}
-                          </span>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-[#00d26a]/10 text-[#00d26a] border border-[#00d26a]/30">
+                              {friend.status === "watching" ? "Assistindo" : "Online"}
+                            </span>
+
+                            {/* Dropdown 3 Pontinhos */}
+                            <div className="relative">
+                              <button
+                                onClick={() =>
+                                  setActiveMenuFriendId(activeMenuFriendId === friend.userId ? null : friend.userId)
+                                }
+                                className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/15 text-neutral-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                                title="Opções de amizade"
+                              >
+                                <MoreVertical className="w-3.5 h-3.5" />
+                              </button>
+
+                              {activeMenuFriendId === friend.userId && (
+                                <div className="absolute right-0 top-8 w-44 bg-[#222222] border border-white/10 rounded-xl shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuFriendId(null);
+                                      const matchedFriend: any = friends.find((f: any) => f.id === friend.userId);
+                                      setConfirmAction({
+                                        type: "remove",
+                                        friendId: friend.userId,
+                                        friendshipId: matchedFriend?.friendshipId,
+                                        name: friend.userName,
+                                      });
+                                    }}
+                                    className="w-full px-3 py-2 text-left text-xs text-neutral-300 hover:text-white hover:bg-white/10 flex items-center space-x-2 transition-colors cursor-pointer"
+                                  >
+                                    <UserMinus className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>Desfazer Amizade</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuFriendId(null);
+                                      const matchedFriend: any = friends.find((f: any) => f.id === friend.userId);
+                                      setConfirmAction({
+                                        type: "block",
+                                        friendId: friend.userId,
+                                        friendshipId: matchedFriend?.friendshipId,
+                                        name: friend.userName,
+                                      });
+                                    }}
+                                    className="w-full px-3 py-2 text-left text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center space-x-2 transition-colors cursor-pointer"
+                                  >
+                                    <Ban className="w-3.5 h-3.5 text-red-500" />
+                                    <span>Bloquear Usuário</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
 
                         {friend.watchingTitle && (
@@ -439,7 +624,154 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                 </div>
               )}
 
-              {/* Sub-aba 2: Pedidos de Amizade */}
+              {/* ================= SUB-ABA 2: TODOS OS AMIGOS ================= */}
+              {friendSubTab === "all" && (
+                <div className="space-y-3">
+                  {/* Busca local por nome */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={allFriendsSearchQuery}
+                      onChange={(e) => setAllFriendsSearchQuery(e.target.value)}
+                      placeholder="Filtrar amigos por nome ou email..."
+                      className="w-full pl-9 pr-3 py-2 bg-[#202020] border border-white/10 rounded-xl text-white placeholder-neutral-500 text-xs focus:outline-none focus:border-[#38bdf8]"
+                    />
+                  </div>
+
+                  {filteredAllFriends.length === 0 ? (
+                    <div className="p-8 text-center bg-[#1e1e1e] rounded-2xl border border-white/5 space-y-3">
+                      <Users className="w-8 h-8 text-neutral-500 mx-auto" />
+                      <div className="space-y-1">
+                        <p className="text-sm font-bold text-white">
+                          {friends.length === 0 ? "Nenhum amigo adicionado ainda" : "Nenhum amigo encontrado"}
+                        </p>
+                        <p className="text-xs text-neutral-400 max-w-xs mx-auto">
+                          {friends.length === 0
+                            ? "Busque outros usuários para compartilhar sessões sincronizadas e criar Watch Parties privadas."
+                            : "Tente um termo de busca diferente para localizar seus amigos."}
+                        </p>
+                      </div>
+                      {friends.length === 0 && (
+                        <button
+                          onClick={() => setFriendSubTab("search")}
+                          className="px-4 py-2 rounded-xl bg-[#E50914] hover:bg-[#E50914]/85 text-white text-xs font-bold transition-all cursor-pointer"
+                        >
+                          Adicionar Amigos
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    filteredAllFriends.map((friend: any) => {
+                      const onlinePres = onlineUsers.find((u) => u.userId === friend.id);
+                      const isOnline = !!onlinePres;
+
+                      return (
+                        <div
+                          key={friend.id}
+                          className="p-3.5 rounded-xl bg-[#1e1e1e] border border-white/5 hover:border-white/15 transition-all flex items-center justify-between"
+                        >
+                          <div className="flex items-center space-x-3 min-w-0">
+                            <div className="relative flex-none">
+                              <div className="w-9 h-9 rounded-full bg-[#E50914] text-white font-bold text-xs flex items-center justify-center">
+                                {(friend.name || "U").substring(0, 2).toUpperCase()}
+                              </div>
+                              <span
+                                className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-[#1e1e1e] ${
+                                  isOnline ? "bg-[#00d26a]" : "bg-neutral-500"
+                                }`}
+                              />
+                            </div>
+                            <div className="min-w-0 pr-2">
+                              <p className="text-xs font-semibold text-white truncate">{friend.name}</p>
+                              <p className="text-[11px] text-neutral-400 truncate">
+                                {isOnline
+                                  ? onlinePres?.status === "watching" && onlinePres.watchingTitle
+                                    ? `Assistindo: ${onlinePres.watchingTitle.name}`
+                                    : "Online agora"
+                                  : "Offline"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1.5 flex-none">
+                            {isOnline && (
+                              <button
+                                onClick={() => handleSendInviteToFriend(friend.id)}
+                                disabled={invitedUserIds.has(friend.id)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center space-x-1 cursor-pointer transition-all ${
+                                  invitedUserIds.has(friend.id)
+                                    ? "bg-[#00d26a]/20 text-[#00d26a]"
+                                    : "bg-white/10 hover:bg-white/20 text-neutral-200"
+                                }`}
+                                title="Convidar para Party"
+                              >
+                                {invitedUserIds.has(friend.id) ? (
+                                  <Check className="w-3.5 h-3.5" />
+                                ) : (
+                                  <Sparkles className="w-3.5 h-3.5 text-[#E50914]" />
+                                )}
+                                <span className="hidden sm:inline">Party</span>
+                              </button>
+                            )}
+
+                            {/* Dropdown de Ações */}
+                            <div className="relative">
+                              <button
+                                onClick={() =>
+                                  setActiveMenuFriendId(activeMenuFriendId === friend.id ? null : friend.id)
+                                }
+                                className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/15 text-neutral-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                                title="Mais opções"
+                              >
+                                <MoreVertical className="w-3.5 h-3.5" />
+                              </button>
+
+                              {activeMenuFriendId === friend.id && (
+                                <div className="absolute right-0 top-8 w-44 bg-[#222222] border border-white/10 rounded-xl shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuFriendId(null);
+                                      setConfirmAction({
+                                        type: "remove",
+                                        friendId: friend.id,
+                                        friendshipId: friend.friendshipId,
+                                        name: friend.name,
+                                      });
+                                    }}
+                                    className="w-full px-3 py-2 text-left text-xs text-neutral-300 hover:text-white hover:bg-white/10 flex items-center space-x-2 transition-colors cursor-pointer"
+                                  >
+                                    <UserMinus className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>Desfazer Amizade</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuFriendId(null);
+                                      setConfirmAction({
+                                        type: "block",
+                                        friendId: friend.id,
+                                        friendshipId: friend.friendshipId,
+                                        name: friend.name,
+                                      });
+                                    }}
+                                    className="w-full px-3 py-2 text-left text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center space-x-2 transition-colors cursor-pointer"
+                                  >
+                                    <Ban className="w-3.5 h-3.5 text-red-500" />
+                                    <span>Bloquear Usuário</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* ================= SUB-ABA 3: PEDIDOS DE AMIZADE ================= */}
               {friendSubTab === "requests" && (
                 <div className="space-y-3">
                   {!isAuthenticated ? (
@@ -454,8 +786,10 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                       </Link>
                     </div>
                   ) : pendingRequests.length === 0 ? (
-                    <div className="p-6 text-center text-neutral-400 text-xs bg-[#202020] rounded-xl border border-white/5">
-                      Nenhuma solicitação de amizade pendente.
+                    <div className="p-8 text-center bg-[#1e1e1e] rounded-2xl border border-white/5 space-y-2">
+                      <Clock className="w-8 h-8 text-neutral-500 mx-auto" />
+                      <p className="text-sm font-semibold text-white">Nenhum pedido pendente</p>
+                      <p className="text-xs text-neutral-400">Você não possui solicitações de amizade pendentes no momento.</p>
                     </div>
                   ) : (
                     pendingRequests.map((req) => (
@@ -509,7 +843,7 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                 </div>
               )}
 
-              {/* Sub-aba 3: Buscar / Adicionar Amigos */}
+              {/* ================= SUB-ABA 4: BUSCAR / ADICIONAR AMIGOS ================= */}
               {friendSubTab === "search" && (
                 <div className="space-y-4">
                   {!isAuthenticated ? (
@@ -556,18 +890,37 @@ export function SocialDrawer({ isOpen, onClose, defaultTab = "friends" }: Social
                                 </div>
                                 <div>
                                   <p className="text-xs font-semibold text-white">{user.name}</p>
-                                  <p className="text-[11px] text-neutral-400 truncate max-w-[180px]">{user.email}</p>
+                                  <p className="text-[11px] text-neutral-400 truncate max-w-[170px]">{user.email}</p>
                                 </div>
                               </div>
 
-                              <button
-                                onClick={() => handleAddFriend(user.id)}
-                                disabled={!!actionFeedback[user.id]}
-                                className="px-3 py-1.5 bg-[#E50914] hover:bg-[#E50914]/85 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 cursor-pointer disabled:opacity-50"
-                              >
-                                <UserPlus className="w-3.5 h-3.5" />
-                                <span>{actionFeedback[user.id] || "Adicionar"}</span>
-                              </button>
+                              {/* Status Contextual */}
+                              {user.friendshipStatus === "FRIENDS" ? (
+                                <span className="text-[11px] font-semibold text-[#00d26a] flex items-center gap-1 px-2.5 py-1 rounded bg-[#00d26a]/10 border border-[#00d26a]/30">
+                                  <Check className="w-3.5 h-3.5" /> Amigos
+                                </span>
+                              ) : user.friendshipStatus === "PENDING_SENT" ? (
+                                <span className="text-[11px] font-semibold text-neutral-400 flex items-center gap-1 px-2.5 py-1 rounded bg-white/5 border border-white/10">
+                                  <Clock className="w-3.5 h-3.5" /> Enviado
+                                </span>
+                              ) : user.friendshipStatus === "PENDING_RECEIVED" ? (
+                                <button
+                                  onClick={() => handleAccept(user.friendshipId || "")}
+                                  className="px-2.5 py-1 bg-[#00d26a] hover:bg-[#00d26a]/90 text-black text-xs font-bold rounded-lg flex items-center space-x-1 cursor-pointer"
+                                >
+                                  <UserCheck className="w-3.5 h-3.5" />
+                                  <span>Aceitar</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleAddFriend(user.id)}
+                                  disabled={!!actionFeedback[user.id]}
+                                  className="px-3 py-1.5 bg-[#E50914] hover:bg-[#E50914]/85 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                                >
+                                  <UserPlus className="w-3.5 h-3.5" />
+                                  <span>{actionFeedback[user.id] || "Adicionar"}</span>
+                                </button>
+                              )}
                             </div>
                           ))
                         )}

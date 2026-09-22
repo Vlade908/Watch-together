@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
 import { FastifyRequest } from "fastify";
 import { PresenceService } from "../services/presenceService";
+import { FriendService } from "../services/friendService";
 import { PartyService } from "../services/partyService";
 import { UserPresence, SocialClientMessage, SocialServerMessage, RoomInvite } from "../types";
 import { SocketRateLimiter } from "./socketRateLimiter";
@@ -55,9 +56,14 @@ export function handleSocialWebSocket(
       userId: authUserId,
       userName: String(user.userName || "Usuário").slice(0, 60),
     };
-    await PresenceService.upsertPresence(currentUser);
 
-    // Assina canal de notificações privadas deste usuário (convites de sala, amizades, convites de party)
+    // Recupera a lista de amigos aceitos para presença estritamente privada
+    const friendUserIds = await FriendService.getFriendUserIds(currentUser.userId);
+
+    // Notifica presença apenas aos amigos aceitos
+    await PresenceService.upsertPresence(currentUser, friendUserIds);
+
+    // Assina canal de notificações privadas deste usuário (convites de sala, amizades, convites de party e presença de amigos)
     if (unsubscribeNotifications) unsubscribeNotifications();
     unsubscribeNotifications = PresenceService.subscribeUserNotifications(currentUser.userId, async (msg: SocialServerMessage) => {
       send(msg);
@@ -67,12 +73,15 @@ export function handleSocialWebSocket(
       }
     });
 
-    // Envia snapshot completo (usuários, salas e party ativa)
-    const [onlineUsers, activeRooms, currentParty] = await Promise.all([
+    // Envia snapshot seguro (apenas amigos online, salas ativas e party)
+    const [allOnlineUsers, activeRooms, currentParty] = await Promise.all([
       PresenceService.getAllOnlineUsers(),
       PresenceService.getActiveRooms(),
       PartyService.getUserParty(currentUser.userId),
     ]);
+
+    // Filtra estritamente para incluir apenas amigos aceitos no snapshot
+    const friendOnlineUsers = allOnlineUsers.filter((u) => friendUserIds.includes(u.userId));
 
     if (currentParty) {
       setupPartySubscription(currentParty.id);
@@ -80,7 +89,7 @@ export function handleSocialWebSocket(
 
     send({
       type: "social_snapshot",
-      onlineUsers,
+      onlineUsers: friendOnlineUsers,
       activeRooms,
     });
 
@@ -169,7 +178,8 @@ export function handleSocialWebSocket(
             lastSeen: Date.now(),
           };
           currentUser = updatedUser;
-          await PresenceService.upsertPresence(updatedUser);
+          const friendUserIds = await FriendService.getFriendUserIds(currentUser.userId);
+          await PresenceService.upsertPresence(updatedUser, friendUserIds);
           break;
         }
 
@@ -294,7 +304,8 @@ export function handleSocialWebSocket(
     if (unsubscribeParty) unsubscribeParty();
 
     if (currentUser) {
-      await PresenceService.removePresence(currentUser.userId);
+      const friendUserIds = await FriendService.getFriendUserIds(currentUser.userId);
+      await PresenceService.removePresence(currentUser.userId, friendUserIds);
     }
   });
 }

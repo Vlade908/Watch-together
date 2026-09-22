@@ -76,9 +76,23 @@ export class PresenceService {
   }
 
   /**
-   * Atualiza ou insere presença de um usuário no Redis
+   * Notifica a presença ou atualização de um usuário diretamente aos seus amigos aceitos
    */
-  public static async upsertPresence(user: UserPresence): Promise<void> {
+  public static async notifyFriendsPresence(friendIds: string[], event: SocialServerMessage): Promise<void> {
+    if (!friendIds || friendIds.length === 0) return;
+    const payload = JSON.stringify(event);
+    await Promise.all(
+      friendIds.map((friendId) =>
+        redisPublisher.publish(`user:${friendId}:notifications`, payload)
+      )
+    );
+  }
+
+  /**
+   * Atualiza ou insere presença de um usuário no Redis
+   * Notifica estritamente os amigos aceitos via canais privados
+   */
+  public static async upsertPresence(user: UserPresence, friendIds?: string[]): Promise<void> {
     const data: UserPresence = {
       ...user,
       lastSeen: Date.now(),
@@ -88,25 +102,29 @@ export class PresenceService {
     // Expira o conjunto de usuários caso não haja atividade
     await redisClient.expire(this.USERS_KEY, 86400);
 
-    // Emite evento via Pub/Sub
-    const event: SocialServerMessage = {
-      type: "user_presence_changed",
-      user: data,
-    };
-    await redisPublisher.publish("social:presence:events", JSON.stringify(event));
+    if (friendIds && friendIds.length > 0) {
+      const event: SocialServerMessage = {
+        type: "user_presence_changed",
+        user: data,
+      };
+      await this.notifyFriendsPresence(friendIds, event);
+    }
   }
 
   /**
    * Remove a presença de um usuário que desconectou
+   * Notifica estritamente os amigos aceitos via canais privados
    */
-  public static async removePresence(userId: string): Promise<void> {
+  public static async removePresence(userId: string, friendIds?: string[]): Promise<void> {
     await redisClient.hdel(this.USERS_KEY, userId);
 
-    const event: SocialServerMessage = {
-      type: "user_went_offline",
-      userId,
-    };
-    await redisPublisher.publish("social:presence:events", JSON.stringify(event));
+    if (friendIds && friendIds.length > 0) {
+      const event: SocialServerMessage = {
+        type: "user_went_offline",
+        userId,
+      };
+      await this.notifyFriendsPresence(friendIds, event);
+    }
   }
 
   /**
