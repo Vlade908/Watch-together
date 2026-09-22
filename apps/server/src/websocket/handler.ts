@@ -4,6 +4,8 @@ import { RoomService } from "../services/roomService";
 import { PubSubService } from "../services/pubsubService";
 import { PresenceService } from "../services/presenceService";
 import { ClientMessage, ServerMessage, RoomMember, MediaSourceType } from "../types";
+import { SocketRateLimiter } from "./socketRateLimiter";
+import { isValidMediaUrl } from "../utils/urlValidator";
 
 export function handleRoomWebSocket(
   socket: WebSocket,
@@ -15,6 +17,9 @@ export function handleRoomWebSocket(
   const timestamp = new Date().toISOString();
 
   console.log(`[${timestamp}] [WS /ws/rooms/${roomId}] Nova conexão recebida de ${clientIp} (Origin: ${origin})`);
+
+  // VULN-03: Limitador de taxa em memória por conexão WebSocket (máximo 30 mensagens por segundo)
+  const rateLimiter = new SocketRateLimiter(30, 1000);
 
   let currentMember: RoomMember | null = null;
   let isAlive = true;
@@ -69,6 +74,12 @@ export function handleRoomWebSocket(
 
   socket.on("message", async (data: Buffer | string) => {
     try {
+      // VULN-03: Prevenção contra flooding e exaustão de CPU/Redis
+      if (!rateLimiter.consume()) {
+        send({ type: "error", message: "Taxa de comandos excedida. Aguarde um instante." });
+        return;
+      }
+
       const parsed = JSON.parse(data.toString()) as ClientMessage;
 
       switch (parsed.type) {
@@ -84,10 +95,10 @@ export function handleRoomWebSocket(
           break;
         }
 
-        // 2. Entrada do Usuário na Sala
+        // 2. Entrada do Usuário na Sala (VULN-01: Ancoragem de ID no token verificado)
         case "join_room": {
-          const memberUserId = authenticatedUser?.id || parsed.userId;
-          const memberUserName = authenticatedUser?.name || parsed.userName;
+          const memberUserId = authenticatedUser.id; // Imutabilidade estrita de identidade
+          const memberUserName = authenticatedUser.name || parsed.userName;
 
           const isLocalRoom =
             parsed.initialSourceType === "LOCAL_FILE" ||
@@ -285,18 +296,32 @@ export function handleRoomWebSocket(
             break;
           }
 
+          // VULN-05: Sanitização e validação estrita de protocolo para directUrl
+          if (parsed.sourceType === "DIRECT_URL") {
+            if (!parsed.directUrl || !isValidMediaUrl(parsed.directUrl)) {
+              send({
+                type: "error",
+                message: "A URL de mídia direta deve usar obrigatoriamente protocolo HTTP ou HTTPS válido.",
+              });
+              break;
+            }
+          }
+
+          const safeMediaTitle = parsed.mediaTitle ? String(parsed.mediaTitle).slice(0, 150) : undefined;
+          const safeDirectUrl = parsed.directUrl ? String(parsed.directUrl).slice(0, 2048) : undefined;
+
           const updatedState = await RoomService.updateRoomMediaSource(
             roomId,
             parsed.sourceType,
             parsed.contentFingerprint,
-            parsed.mediaTitle,
-            parsed.directUrl
+            safeMediaTitle,
+            safeDirectUrl
           );
 
           await PubSubService.publishRoomEvent(roomId, {
             type: "source_updated",
             state: updatedState,
-            directUrl: parsed.directUrl,
+            directUrl: safeDirectUrl,
             triggeredBy: { userId: currentMember.userId, userName: currentMember.userName },
           });
 
@@ -347,15 +372,20 @@ export function handleRoomWebSocket(
           break;
         }
 
-        // 7. Chat da Sala
+        // 8. Chat da Sala (VULN-09: Remetente Imutável & VULN-12: Bounds de 1.000 caracteres)
         case "chat_message": {
           if (!currentMember) return;
+          const rawText = String(parsed.text || "").trim();
+          if (!rawText) return;
+
+          const safeText = rawText.slice(0, 1000);
+
           await PubSubService.publishRoomEvent(roomId, {
             type: "chat_broadcast",
-            id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            text: parsed.text,
+            id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            text: safeText,
             senderId: currentMember.userId,
-            senderName: parsed.senderName || currentMember.userName,
+            senderName: currentMember.userName, // VULN-09: Imutável do membro autenticado
             timestamp: Date.now(),
           });
           break;

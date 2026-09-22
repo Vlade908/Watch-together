@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import dotenv from "dotenv";
 import { PubSubService } from "./services/pubsubService";
@@ -29,19 +30,90 @@ dotenv.config();
 const PORT = parseInt(process.env.PORT || "4000", 10);
 const HOST = process.env.HOST || "::";
 
+// VULN-11: Bloqueio estrito de segredos JWT inseguros/padrão em ambiente de produção
+const jwtSecret = process.env.JWT_SECRET || "super-secret-watch-together-key-change-in-production";
+const isProduction = process.env.NODE_ENV === "production";
+if (isProduction && (!process.env.JWT_SECRET || jwtSecret.includes("super-secret") || jwtSecret.length < 32)) {
+  console.error("❌ [FATAL] JWT_SECRET não configurado adequadamente para o ambiente de produção (mínimo de 32 caracteres seguros exigido).");
+  process.exit(1);
+}
+
 const fastify = Fastify({
   logger: {
-    level: process.env.NODE_ENV === "production" ? "info" : "warn",
+    level: isProduction ? "info" : "warn",
   },
+  requestIdHeader: "x-request-id",
+  genReqId: () => `req-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+});
+
+// VULN-07: Sanitizador Global de Erros - Oculta stack traces, dados do Prisma e detalhes internos em respostas 500
+fastify.setErrorHandler((error: any, request, reply) => {
+  request.log.error({ err: error, reqId: request.id }, "Erro não tratado capturado no Fastify Gateway");
+
+  if (error.validation) {
+    return reply.status(400).send({
+      statusCode: 400,
+      error: "Bad Request",
+      message: "Dados de requisição inválidos ou fora do schema esperado.",
+      requestId: request.id,
+    });
+  }
+
+  const statusCode =
+    error.statusCode && error.statusCode >= 400 && error.statusCode < 600
+      ? error.statusCode
+      : 500;
+
+  if (statusCode === 500) {
+    return reply.status(500).send({
+      statusCode: 500,
+      error: "Internal Server Error",
+      message: "Ocorreu um erro interno no servidor. Por favor, tente novamente mais tarde.",
+      requestId: request.id,
+    });
+  }
+
+  return reply.status(statusCode).send({
+    statusCode,
+    error: error.name || "Error",
+    message: error.message || "Erro no processamento da solicitação.",
+    requestId: request.id,
+  });
 });
 
 async function main() {
-  // 1. Plugins de CORS, WebSockets e JWT
+  // VULN-02: Política Restrita de CORS baseada em lista de origens autorizadas (sem wildcard com credenciais)
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim().replace(/\/$/, ""))
+    : [
+        (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, ""),
+        "http://127.0.0.1:3000",
+      ];
+
   await fastify.register(cors, {
-    origin: true,
+    origin: (origin, cb) => {
+      // Permite requisições sem cabeçalho Origin (serviços server-to-server, curl, healthchecks)
+      if (!origin) return cb(null, true);
+      const normalizedOrigin = origin.replace(/\/$/, "");
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return cb(null, true);
+      }
+      return cb(new Error("CORS: Origem não permitida pela política de segurança."), false);
+    },
     credentials: true,
-    allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+    allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization", "X-Admin-Key"],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  });
+
+  // VULN-03: Rate Limiting Global no Gateway HTTP (Prevenção de DoS e Força Bruta)
+  await fastify.register(rateLimit, {
+    max: 120, // 120 requisições por minuto por IP globalmente
+    timeWindow: "1 minute",
+    errorResponseBuilder: (req, context) => ({
+      statusCode: 429,
+      error: "Too Many Requests",
+      message: `Limite de taxa de requisições excedido. Tente novamente em ${context.after}.`,
+    }),
   });
 
   await fastify.register(websocket, {
@@ -52,7 +124,7 @@ async function main() {
   });
 
   await fastify.register(jwt, {
-    secret: process.env.JWT_SECRET || "super-secret-watch-together-key-change-in-production",
+    secret: jwtSecret,
   });
 
   fastify.decorate("authenticate", async function (req: any, reply: any) {
@@ -109,14 +181,36 @@ async function main() {
     }
   );
 
-  fastify.post("/api/recommendations/reindex", async (req, reply) => {
-    try {
-      const result = await EmbeddingService.indexCatalogTitles();
-      return { status: "ok", message: "Catálogo indexado com sucesso", ...result };
-    } catch (err: any) {
-      return reply.status(500).send({ error: "Falha ao reindexar embeddings", details: err.message });
+  // VULN-06: Endpoint administrativo /reindex protegido com JWT e validação de perfil/chave de administrador
+  fastify.post(
+    "/api/recommendations/reindex",
+    { preHandler: [fastify.authenticate] },
+    async (req: any, reply) => {
+      const adminSecret = process.env.ADMIN_SECRET_KEY;
+      const headerKey = req.headers["x-admin-key"];
+      const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase());
+      const userEmail = req.user?.email ? String(req.user.email).toLowerCase() : "";
+
+      const isAuthorizedAdmin =
+        (adminSecret && headerKey === adminSecret) ||
+        (adminEmails.length > 0 && adminEmails.includes(userEmail)) ||
+        req.user?.role === "ADMIN";
+
+      if (!isAuthorizedAdmin) {
+        return reply.status(403).send({
+          error: "Acesso Proibido",
+          message: "Apenas administradores autorizados têm permissão para reindexar o catálogo vetorial.",
+        });
+      }
+
+      try {
+        const result = await EmbeddingService.indexCatalogTitles();
+        return { status: "ok", message: "Catálogo indexado com sucesso", ...result };
+      } catch (err: any) {
+        return reply.status(500).send({ error: "Falha ao reindexar embeddings", details: err.message });
+      }
     }
-  });
+  );
 
   fastify.get("/api/titles", async () => {
     const titles = await prisma.title.findMany({

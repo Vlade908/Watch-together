@@ -207,10 +207,9 @@ export class RecommendationService {
 
     if (userWatched.length > 0) {
       const watchedTitleIds = userWatched.map((w) => w.titleId);
-      const rows: any[] = await prisma.$queryRawUnsafe(
-        `SELECT "titleId", embedding::text FROM title_embeddings WHERE "titleId" = ANY($1::text[])`,
-        watchedTitleIds
-      );
+      const rows = await prisma.$queryRaw<Array<{ titleId: string; embedding: string }>>`
+        SELECT "titleId", embedding::text FROM title_embeddings WHERE "titleId" = ANY(${watchedTitleIds}::text[])
+      `;
 
       let totalWeight = 0;
       for (const row of rows) {
@@ -247,9 +246,8 @@ export class RecommendationService {
 
     const tasteVectorLiteral = `[${tasteVector.join(",")}]`;
 
-    // 5. Query pgvector via índice HNSW e operador de distância de cosseno (<=>)
-    const semanticCandidates: any[] = await prisma.$queryRawUnsafe(
-      `
+    // 5. Query pgvector via índice HNSW e operador de distância de cosseno (<=>) com tagged template seguro
+    const semanticCandidates: any[] = await prisma.$queryRaw`
       SELECT 
         t.id, 
         t.slug, 
@@ -260,14 +258,12 @@ export class RecommendationService {
         t.genres, 
         t."releaseYear", 
         t.type,
-        1 - (te.embedding <=> $1::vector) as semantic_similarity
+        1 - (te.embedding <=> ${tasteVectorLiteral}::vector) as semantic_similarity
       FROM titles t
       JOIN title_embeddings te ON t.id = te."titleId"
-      ORDER BY te.embedding <=> $1::vector ASC
+      ORDER BY te.embedding <=> ${tasteVectorLiteral}::vector ASC
       LIMIT 25;
-      `,
-      tasteVectorLiteral
-    );
+    `;
 
     // 6. Calcula Popularidade Global
     const allProgresses = await prisma.watchProgress.findMany({

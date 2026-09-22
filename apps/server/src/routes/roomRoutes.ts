@@ -2,13 +2,20 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { RoomService } from "../services/roomService";
 import { MediaSourceType } from "../types";
+import { isValidMediaUrl } from "../utils/urlValidator";
 
 const createRoomSchema = z.object({
   roomId: z.string().min(3).max(100),
-  mediaId: z.string().optional(),
+  mediaId: z.string().max(100).optional(),
   sourceType: z.enum(["LOCAL_FILE", "DIRECT_URL", "CATALOG_DEMO"]).optional(),
-  mediaTitle: z.string().optional(),
-  directUrl: z.string().optional(),
+  mediaTitle: z.string().max(150).optional(),
+  directUrl: z
+    .string()
+    .max(2048)
+    .optional()
+    .refine((url) => !url || isValidMediaUrl(url), {
+      message: "A URL de mídia direta deve usar obrigatoriamente protocolo HTTP ou HTTPS válido.",
+    }),
 });
 
 export async function roomRoutes(fastify: FastifyInstance) {
@@ -36,7 +43,9 @@ export async function roomRoutes(fastify: FastifyInstance) {
 
       return reply.status(201).send({ ok: true, room: roomState });
     } catch (err: any) {
-      return reply.status(500).send({ error: "Erro ao inicializar sala", details: err.message });
+      const status = err.statusCode || 500;
+      const message = status === 500 ? "Erro interno ao inicializar sala." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 
@@ -49,7 +58,9 @@ export async function roomRoutes(fastify: FastifyInstance) {
       }
       return reply.send({ ok: true, room: state });
     } catch (err: any) {
-      return reply.status(500).send({ error: "Erro ao consultar sala", details: err.message });
+      const status = err.statusCode || 500;
+      const message = status === 500 ? "Erro interno ao consultar sala." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 }

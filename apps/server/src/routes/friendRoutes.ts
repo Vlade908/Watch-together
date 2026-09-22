@@ -31,7 +31,8 @@ export async function friendRoutes(fastify: FastifyInstance) {
       return reply.send(data);
     } catch (err: any) {
       const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      const message = status === 500 ? "Erro interno ao listar amizades." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 
@@ -44,7 +45,8 @@ export async function friendRoutes(fastify: FastifyInstance) {
       return reply.send({ users: results });
     } catch (err: any) {
       const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      const message = status === 500 ? "Erro interno ao buscar usuários." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 
@@ -64,7 +66,8 @@ export async function friendRoutes(fastify: FastifyInstance) {
       return reply.status(201).send(result);
     } catch (err: any) {
       const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      const message = status === 500 ? "Erro interno ao enviar pedido de amizade." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 
@@ -84,7 +87,8 @@ export async function friendRoutes(fastify: FastifyInstance) {
       return reply.send({ status: "ACCEPTED", friendship: result });
     } catch (err: any) {
       const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      const message = status === 500 ? "Erro interno ao aceitar amizade." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 
@@ -104,7 +108,8 @@ export async function friendRoutes(fastify: FastifyInstance) {
       return reply.send(result);
     } catch (err: any) {
       const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      const message = status === 500 ? "Erro interno ao gerenciar amizade." : err.message;
+      return reply.status(status).send({ error: message });
     }
   });
 }

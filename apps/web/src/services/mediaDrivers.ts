@@ -103,10 +103,25 @@ export class LocalFileDriver implements IMediaSourceDriver {
 }
 
 /**
+ * Validador defensivo de protocolo contra esquemas maliciosos (javascript:, data:, file:, etc.)
+ */
+export function isValidMediaUrl(url?: string | null): boolean {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.length > 2048) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Detecta se a URL é um manifesto adaptativo (HLS ou DASH)
  */
 export function isAdaptiveStreamUrl(url: string): boolean {
-  if (!url || typeof url !== "string") return false;
+  if (!isValidMediaUrl(url)) return false;
   const cleanUrl = url.toLowerCase().split("?")[0].split("#")[0];
   const fullUrl = url.toLowerCase();
   return (
@@ -129,11 +144,18 @@ export class DirectUrlDriver implements IMediaSourceDriver {
   public isLocal = false;
 
   constructor(url: string, title?: string) {
-    this.directUrl = url;
+    if (!isValidMediaUrl(url)) {
+      throw new Error("Protocolo de mídia inválido. Apenas URLs com HTTP ou HTTPS são permitidas.");
+    }
+    this.directUrl = url.trim();
     this.title = title || url.split("/").pop()?.split("?")[0] || "Vídeo Direto";
   }
 
   async attach(videoElement: HTMLVideoElement, shakaPlayer?: any): Promise<void> {
+    if (!isValidMediaUrl(this.directUrl)) {
+      throw new Error("URL de mídia recusada por razões de segurança.");
+    }
+
     const isAdaptive = isAdaptiveStreamUrl(this.directUrl);
 
     if (isAdaptive) {

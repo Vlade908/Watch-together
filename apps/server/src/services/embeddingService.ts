@@ -148,9 +148,9 @@ export class EmbeddingService {
    * Verifica se os títulos já possuem embeddings indexados
    */
   static async isIndexPopulated(): Promise<boolean> {
-    const count: any = await prisma.$queryRawUnsafe(
-      `SELECT count(*)::int as count FROM title_embeddings WHERE embedding IS NOT NULL;`
-    );
+    const count = await prisma.$queryRaw<Array<{ count: number }>>`
+      SELECT count(*)::int as count FROM title_embeddings WHERE embedding IS NOT NULL;
+    `;
     const num = count[0]?.count || 0;
     return num > 0;
   }

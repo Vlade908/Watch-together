@@ -12,6 +12,7 @@
   "dependencies": {
     "@fastify/cors": "^10.0.2",
     "@fastify/jwt": "^9.0.4",
+    "@fastify/rate-limit": "^11.2.0",
     "@fastify/websocket": "^11.0.2",
     "@watch-together/database": "*",
     "bcryptjs": "^3.0.2",

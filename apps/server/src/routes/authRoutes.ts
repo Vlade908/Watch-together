@@ -15,69 +15,93 @@ const loginSchema = z.object({
 });
 
 export async function authRoutes(fastify: FastifyInstance) {
-  // POST /api/auth/register
-  fastify.post("/register", async (req, reply) => {
-    const parseResult = registerSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return reply.status(400).send({
-        error: "Dados inválidos",
-        details: parseResult.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })),
-      });
-    }
-
-    try {
-      const user = await AuthService.register(parseResult.data);
-      const token = fastify.jwt.sign(
-        {
-          sub: user.id,
-          email: user.email,
-          name: user.name,
-          avatarUrl: user.avatarUrl,
+  // POST /api/auth/register (VULN-03: Rate limit restrito contra bots de registro)
+  fastify.post(
+    "/register",
+    {
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: "1 minute",
         },
-        { expiresIn: "7d" }
-      );
+      },
+    },
+    async (req, reply) => {
+      const parseResult = registerSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Dados inválidos",
+          details: parseResult.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })),
+        });
+      }
 
-      return reply.status(201).send({
-        user,
-        token,
-      });
-    } catch (err: any) {
-      const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      try {
+        const user = await AuthService.register(parseResult.data);
+        const token = fastify.jwt.sign(
+          {
+            sub: user.id,
+            email: user.email,
+            name: user.name,
+            avatarUrl: user.avatarUrl,
+          },
+          { expiresIn: "7d" }
+        );
+
+        return reply.status(201).send({
+          user,
+          token,
+        });
+      } catch (err: any) {
+        const status = err.statusCode || 500;
+        const message = status === 500 ? "Erro interno ao processar cadastro." : err.message;
+        return reply.status(status).send({ error: message });
+      }
     }
-  });
+  );
 
-  // POST /api/auth/login
-  fastify.post("/login", async (req, reply) => {
-    const parseResult = loginSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return reply.status(400).send({
-        error: "Dados inválidos",
-        details: parseResult.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })),
-      });
-    }
-
-    try {
-      const user = await AuthService.login(parseResult.data);
-      const token = fastify.jwt.sign(
-        {
-          sub: user.id,
-          email: user.email,
-          name: user.name,
-          avatarUrl: user.avatarUrl,
+  // POST /api/auth/login (VULN-03: Rate limit restrito contra ataques de força bruta)
+  fastify.post(
+    "/login",
+    {
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: "1 minute",
         },
-        { expiresIn: "7d" }
-      );
+      },
+    },
+    async (req, reply) => {
+      const parseResult = loginSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Dados inválidos",
+          details: parseResult.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })),
+        });
+      }
 
-      return reply.send({
-        user,
-        token,
-      });
-    } catch (err: any) {
-      const status = err.statusCode || 500;
-      return reply.status(status).send({ error: err.message });
+      try {
+        const user = await AuthService.login(parseResult.data);
+        const token = fastify.jwt.sign(
+          {
+            sub: user.id,
+            email: user.email,
+            name: user.name,
+            avatarUrl: user.avatarUrl,
+          },
+          { expiresIn: "7d" }
+        );
+
+        return reply.send({
+          user,
+          token,
+        });
+      } catch (err: any) {
+        const status = err.statusCode || 500;
+        const message = status === 500 ? "Erro interno ao processar login." : err.message;
+        return reply.status(status).send({ error: message });
+      }
     }
-  });
+  );
 
   // GET /api/auth/me (Rota protegida)
   fastify.get(
@@ -90,7 +114,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.send({ user: profile });
       } catch (err: any) {
         const status = err.statusCode || 500;
-        return reply.status(status).send({ error: err.message });
+        const message = status === 500 ? "Erro interno ao consultar perfil." : err.message;
+        return reply.status(status).send({ error: message });
       }
     }
   );

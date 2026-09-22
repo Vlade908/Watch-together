@@ -3,6 +3,7 @@ import { FastifyRequest } from "fastify";
 import { PresenceService } from "../services/presenceService";
 import { PartyService } from "../services/partyService";
 import { UserPresence, SocialClientMessage, SocialServerMessage, RoomInvite } from "../types";
+import { SocketRateLimiter } from "./socketRateLimiter";
 
 export function handleSocialWebSocket(
   socket: WebSocket,
@@ -14,6 +15,10 @@ export function handleSocialWebSocket(
 
   console.log(`[${timestamp}] [WS /ws/social] Nova conexão recebida de ${clientIp} (Origin: ${origin})`);
 
+  // VULN-03: Limitador de taxa em memória por conexão WebSocket (máximo 25 eventos por segundo)
+  const rateLimiter = new SocketRateLimiter(25, 1000);
+
+  let authUserId = "";
   let currentUser: UserPresence | null = null;
   let unsubscribeGlobal: (() => void) | null = null;
   let unsubscribeNotifications: (() => void) | null = null;
@@ -44,7 +49,12 @@ export function handleSocialWebSocket(
   };
 
   const setupUser = async (user: UserPresence) => {
-    currentUser = user;
+    // VULN-01: Garante imutabilidade e integridade estrita do ID autenticado pelo token JWT
+    currentUser = {
+      ...user,
+      userId: authUserId,
+      userName: String(user.userName || "Usuário").slice(0, 60),
+    };
     await PresenceService.upsertPresence(currentUser);
 
     // Assina canal de notificações privadas deste usuário (convites de sala, amizades, convites de party)
@@ -99,8 +109,10 @@ export function handleSocialWebSocket(
     if (!decoded || !decoded.sub) {
       throw new Error("Token payload inválido");
     }
+    authUserId = String(decoded.sub);
+
     setupUser({
-      userId: decoded.sub,
+      userId: authUserId,
       userName: decoded.name || "Você",
       avatarColor: "bg-[#e50914]",
       initials: (decoded.name || "VC").substring(0, 2).toUpperCase(),
@@ -117,26 +129,47 @@ export function handleSocialWebSocket(
 
   socket.on("message", async (data: Buffer | string) => {
     try {
+      // VULN-03: Prevenção contra flooding e ataques de negação de serviço
+      if (!rateLimiter.consume()) {
+        send({ type: "error", message: "Taxa de eventos sociais excedida. Aguarde um instante." });
+        return;
+      }
+
       const parsed = JSON.parse(data.toString()) as SocialClientMessage;
 
       switch (parsed.type) {
-        // 1. Identificação do usuário na conexão
+        // 1. Identificação do usuário na conexão (VULN-01: Proteção contra impersonation)
         case "social_identify": {
-          await setupUser(parsed.user);
+          if (!parsed.user) break;
+          await setupUser({
+            ...parsed.user,
+            userId: authUserId, // Imutável, ancorado no JWT
+          });
           break;
         }
 
         // 2. Atualização de status de presença
         case "social_update_presence": {
           if (!currentUser) return;
-          currentUser = {
+          const safeWatchingTitle = parsed.watchingTitle
+            ? {
+                id: String(parsed.watchingTitle.id || "").slice(0, 100),
+                name: String(parsed.watchingTitle.name || "").slice(0, 150),
+                slug: String(parsed.watchingTitle.slug || "").slice(0, 100),
+                bannerUrl: String(parsed.watchingTitle.bannerUrl || "").slice(0, 500),
+              }
+            : undefined;
+
+          const updatedUser: UserPresence = {
             ...currentUser,
+            userId: authUserId, // Imutável
             status: parsed.status,
-            watchingTitle: parsed.watchingTitle,
-            roomId: parsed.roomId,
+            watchingTitle: safeWatchingTitle,
+            roomId: parsed.roomId ? String(parsed.roomId).slice(0, 100) : undefined,
             lastSeen: Date.now(),
           };
-          await PresenceService.upsertPresence(currentUser);
+          currentUser = updatedUser;
+          await PresenceService.upsertPresence(updatedUser);
           break;
         }
 
@@ -146,16 +179,16 @@ export function handleSocialWebSocket(
           const invite: RoomInvite = {
             inviteId: `inv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
             fromUser: {
-              userId: currentUser.userId,
+              userId: authUserId, // VULN-01: Garante que o remetente é o usuário autenticado
               userName: currentUser.userName,
               avatarColor: currentUser.avatarColor,
               initials: currentUser.initials,
             },
-            toUserId: parsed.toUserId,
-            roomId: parsed.roomId,
-            movieSlug: parsed.movieSlug,
-            movieTitle: parsed.movieTitle,
-            bannerUrl: parsed.bannerUrl,
+            toUserId: String(parsed.toUserId || "").slice(0, 100),
+            roomId: String(parsed.roomId || "").slice(0, 100),
+            movieSlug: String(parsed.movieSlug || "").slice(0, 100),
+            movieTitle: String(parsed.movieTitle || "").slice(0, 150),
+            bannerUrl: parsed.bannerUrl ? String(parsed.bannerUrl).slice(0, 500) : undefined,
             timestamp: Date.now(),
           };
 

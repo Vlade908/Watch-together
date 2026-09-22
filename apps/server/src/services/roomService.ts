@@ -304,7 +304,15 @@ export class RoomService {
   public static async removeMember(roomId: string, userId: string): Promise<RoomMember[]> {
     const key = this.getMembersKey(roomId);
     await redisClient.hdel(key, userId);
-    return this.getMembers(roomId);
+    const remainingMembers = await this.getMembers(roomId);
+
+    // Se não restarem membros na sala, encurta o TTL para 1 hora para economizar memória do Redis
+    if (remainingMembers.length === 0) {
+      await redisClient.expire(key, 3600);
+      await redisClient.expire(this.getRoomKey(roomId), 3600);
+    }
+
+    return remainingMembers;
   }
 
   /**
