@@ -478,13 +478,21 @@ export class FriendService {
     );
     const excludedIds = [userId, ...blockedUserIds];
 
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanQuery);
+
+    const searchConditions: any[] = [
+      { name: { contains: cleanQuery, mode: "insensitive" } },
+      { email: { contains: cleanQuery, mode: "insensitive" } },
+    ];
+
+    if (isUuid) {
+      searchConditions.unshift({ id: cleanQuery });
+    }
+
     const users = await prisma.user.findMany({
       where: {
         id: { notIn: excludedIds },
-        OR: [
-          { name: { contains: cleanQuery, mode: "insensitive" } },
-          { email: { contains: cleanQuery, mode: "insensitive" } },
-        ],
+        OR: searchConditions,
       },
       select: {
         id: true,
