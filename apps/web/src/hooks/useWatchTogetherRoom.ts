@@ -266,6 +266,11 @@ export function useWatchTogetherRoom({
                 break;
               }
 
+              case "pong": {
+                // Heartbeat pong recebido com sucesso do servidor
+                break;
+              }
+
               case "error": {
                 console.warn("[Watch Together Server Alert]:", message.message);
                 break;
@@ -276,15 +281,28 @@ export function useWatchTogetherRoom({
           }
         };
 
-        ws.onclose = (event) => {
+        const scheduleReconnect = () => {
           if (isUnmounted) return;
           setIsConnected(false);
           setIsSyncing(true);
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+          }
+          const delay = Math.min(1500 * Math.pow(1.3, attemptCount), 8000) + Math.random() * 500;
           attemptCount++;
           console.warn(
-            `[Watch Together] Conexão WebSocket encerrada (código: ${event.code}, motivo: "${event.reason || "desconexão"}"). Reconectando em 2.5s...`
+            `[Watch Together] Reconectando à sala '${roomId}' em ${Math.round(delay)}ms (tentativa #${attemptCount})...`
           );
-          reconnectTimeoutRef.current = setTimeout(connect, 2500);
+          reconnectTimeoutRef.current = setTimeout(connect, delay);
+        };
+
+        ws.onclose = (event) => {
+          if (isUnmounted) return;
+          console.warn(
+            `[Watch Together] Conexão WebSocket encerrada (código: ${event.code}, motivo: "${event.reason || "desconexão"}").`
+          );
+          scheduleReconnect();
         };
 
         ws.onerror = (err) => {
@@ -299,7 +317,8 @@ export function useWatchTogetherRoom({
         if (isUnmounted) return;
         attemptCount++;
         console.warn(`[Watch Together] Falha ao instanciar WebSocket (${wsUrl}):`, e);
-        reconnectTimeoutRef.current = setTimeout(connect, 2500);
+        const delay = Math.min(1500 * Math.pow(1.3, attemptCount), 8000) + Math.random() * 500;
+        reconnectTimeoutRef.current = setTimeout(connect, delay);
       }
     }
 
@@ -314,9 +333,48 @@ export function useWatchTogetherRoom({
       }
     }, 4000);
 
+    // Heartbeat ping contínuo a cada 12 segundos para manter viva a conexão em redes móveis (CGNAT / Render Proxy)
+    const pingInterval = setInterval(() => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 12000);
+
+    // Reconexão instantânea quando a aba ou app no celular volta a ficar visível
+    const handleVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+          console.log("[Watch Together] Retorno à aba detectado. Verificando e restabelecendo conexão da sala...");
+          attemptCount = 0;
+          connect();
+        }
+      }
+    };
+
+    // Reconexão imediata quando a rede móvel/Wi-Fi se recupera
+    const handleOnline = () => {
+      console.log("[Watch Together] Rede restabelecida. Reconectando à sala...");
+      attemptCount = 0;
+      connect();
+    };
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+    }
+
     return () => {
       isUnmounted = true;
       clearInterval(clockInterval);
+      clearInterval(pingInterval);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", handleOnline);
+      }
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (socketRef.current) {
         const sock = socketRef.current;

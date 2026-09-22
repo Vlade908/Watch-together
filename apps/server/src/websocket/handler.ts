@@ -67,7 +67,13 @@ export function handleRoomWebSocket(
     console.error(`[${errTs}] [WS /ws/rooms/${roomId}] [WS Error]:`, err.message);
   });
 
-  // Heartbeat do socket
+  // Heartbeat do socket a cada 20 segundos para prevenir encerramento por NATs e proxies em redes móveis (Código 1006)
+  const heartbeatInterval = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.ping();
+    }
+  }, 20000);
+
   socket.on("pong", () => {
     isAlive = true;
   });
@@ -83,6 +89,12 @@ export function handleRoomWebSocket(
       const parsed = JSON.parse(data.toString()) as ClientMessage;
 
       switch (parsed.type) {
+        // 0. Keep-alive ping do cliente
+        case "ping": {
+          send({ type: "pong", timestamp: Date.now() });
+          break;
+        }
+
         // 1. Sincronização de Relógio de Alta Precisão (NTP Cristian's Algorithm)
         case "sync_clock": {
           const serverReceiveTime = Date.now();
@@ -413,6 +425,7 @@ export function handleRoomWebSocket(
   socket.on("close", async (code, reason) => {
     const closeTs = new Date().toISOString();
     console.log(`[${closeTs}] [WS /ws/rooms/${roomId}] [WS Close] Código: ${code}, Motivo: ${reason?.toString() || "desconexão normal"}`);
+    clearInterval(heartbeatInterval);
     unsubscribe();
     if (currentMember) {
       const remaining = await RoomService.removeMember(roomId, currentMember.userId);

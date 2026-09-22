@@ -48,9 +48,11 @@ export type ClientMessage =
       directUrl?: string;
     }
   | { type: "sync_request" }
-  | { type: "chat_message"; text: string; senderName: string };
+  | { type: "chat_message"; text: string; senderName: string }
+  | { type: "ping" };
 
 export type ServerMessage =
+  | { type: "pong"; timestamp: number }
   | {
       type: "clock_pong";
       clientSendTime: number;
