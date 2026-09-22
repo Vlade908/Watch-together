@@ -191,6 +191,8 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
+  const connectRef = useRef<() => void>(() => {});
 
   // Envio tipado para o WebSocket Social
   const send = useCallback((msg: SocialClientMessage) => {
@@ -275,6 +277,7 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         ws.onopen = () => {
           if (isUnmounted) return;
+          reconnectAttemptRef.current = 0;
           setIsConnected(true);
           console.log("[Social Hub] ✓ Conectado à camada de presença em tempo real.");
 
@@ -285,6 +288,15 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               user: currentUserRef.current,
             })
           );
+
+          // Solicita snapshot atualizado imediatamente
+          ws.send(
+            JSON.stringify({
+              type: "get_social_snapshot",
+            })
+          );
+
+          fetchFriendsRef.current();
         };
 
         ws.onmessage = (event) => {
@@ -294,6 +306,11 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const currentUserId = currentUserRef.current.userId;
 
             switch (data.type) {
+              case "pong": {
+                // Heartbeat pong recebido com sucesso
+                break;
+              }
+
               case "social_snapshot": {
                 setRealOnlineUsers(data.onlineUsers.filter((u) => u.userId !== currentUserId));
                 setRealActiveRooms(data.activeRooms);
@@ -369,10 +386,23 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }
         };
 
-        ws.onclose = () => {
-          if (isUnmounted) return;
+        const scheduleReconnect = () => {
+          if (isUnmounted || !token) return;
           setIsConnected(false);
-          reconnectTimeoutRef.current = setTimeout(connect, 3000);
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+          }
+          const attempt = reconnectAttemptRef.current;
+          // Exponential backoff: 1s, 1.5s, 2.25s, 3.37s... até máx 10s + jitter
+          const delay = Math.min(1000 * Math.pow(1.5, attempt), 10000) + Math.random() * 500;
+          reconnectAttemptRef.current += 1;
+          console.log(`[Social Hub] Reconectando em ${Math.round(delay)}ms (tentativa #${reconnectAttemptRef.current})...`);
+          reconnectTimeoutRef.current = setTimeout(connect, delay);
+        };
+
+        ws.onclose = () => {
+          scheduleReconnect();
         };
 
         ws.onerror = () => {
@@ -384,11 +414,15 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         if (!isUnmounted) {
           setIsConnected(false);
-          reconnectTimeoutRef.current = setTimeout(connect, 3000);
+          const attempt = reconnectAttemptRef.current;
+          const delay = Math.min(1000 * Math.pow(1.5, attempt), 10000) + Math.random() * 500;
+          reconnectAttemptRef.current += 1;
+          reconnectTimeoutRef.current = setTimeout(connect, delay);
         }
       }
     }
 
+    connectRef.current = connect;
     connect();
 
     return () => {
@@ -400,6 +434,49 @@ export const SocialProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     };
   }, [token, isAuthLoading, resolveSocialWsUrl, router]);
+
+  // Heartbeat do cliente a cada 20 segundos enquanto o socket estiver aberto
+  useEffect(() => {
+    if (!isConnected) return;
+    const interval = setInterval(() => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        send({ type: "ping" });
+      }
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [isConnected, send]);
+
+  // Reconexão e re-sincronização ao retomar visibilidade ou foco da janela
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        if (!token) return;
+
+        // Se o socket estiver fechado ou quebrado, reconecte imediatamente
+        if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+          console.log("[Social Hub] Janela visível/em foco com socket inativo. Reconectando imediatamente...");
+          reconnectAttemptRef.current = 0;
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+          }
+          connectRef.current();
+        } else {
+          // Se estiver aberto, envie um ping imediato para atualizar a presença e recarregue o snapshot
+          send({ type: "ping" });
+          send({ type: "get_social_snapshot" });
+        }
+        fetchFriendsRef.current();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleVisibilityChange);
+    };
+  }, [token, send]);
 
   // Ações de Amizade
   const sendFriendRequest = useCallback(

@@ -37,6 +37,13 @@ export function handleSocialWebSocket(
     console.error(`[${errTs}] [WS /ws/social] [WS Error]:`, err.message);
   });
 
+  // Heartbeat a cada 25 segundos para manter a conexão aberta contra timeouts de proxies reversos (Cloudflare/Render)
+  const heartbeatInterval = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.ping();
+    }
+  }, 25000);
+
   const setupPartySubscription = (partyId: string | null) => {
     if (unsubscribeParty) {
       unsubscribeParty();
@@ -147,6 +154,15 @@ export function handleSocialWebSocket(
       const parsed = JSON.parse(data.toString()) as SocialClientMessage;
 
       switch (parsed.type) {
+        // 0. Heartbeat ping do cliente com renovação de presença no Redis
+        case "ping": {
+          send({ type: "pong", timestamp: Date.now() });
+          if (currentUser) {
+            await PresenceService.refreshPresence(currentUser.userId, currentUser);
+          }
+          break;
+        }
+
         // 1. Identificação do usuário na conexão (VULN-01: Proteção contra impersonation)
         case "social_identify": {
           if (!parsed.user) break;
@@ -208,14 +224,18 @@ export function handleSocialWebSocket(
 
         // 4. Solicitação de snapshot atualizado
         case "get_social_snapshot": {
-          const [onlineUsers, activeRooms, currentParty] = await Promise.all([
+          const [allOnlineUsers, activeRooms, currentParty] = await Promise.all([
             PresenceService.getAllOnlineUsers(),
             PresenceService.getActiveRooms(),
             currentUser ? PartyService.getUserParty(currentUser.userId) : null,
           ]);
+
+          const friendUserIds = currentUser ? await FriendService.getFriendUserIds(currentUser.userId) : [];
+          const friendOnlineUsers = allOnlineUsers.filter((u) => friendUserIds.includes(u.userId));
+
           send({
             type: "social_snapshot",
-            onlineUsers,
+            onlineUsers: friendOnlineUsers,
             activeRooms,
           });
           send({
@@ -297,6 +317,7 @@ export function handleSocialWebSocket(
   });
 
   socket.on("close", async (code, reason) => {
+    clearInterval(heartbeatInterval);
     const closeTs = new Date().toISOString();
     console.log(`[${closeTs}] [WS /ws/social] [WS Close] Código: ${code}, Motivo: ${reason?.toString() || "desconexão normal"}`);
     if (unsubscribeGlobal) unsubscribeGlobal();

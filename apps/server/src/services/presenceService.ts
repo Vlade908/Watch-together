@@ -112,6 +112,25 @@ export class PresenceService {
   }
 
   /**
+   * Renova o TTL e o timestamp lastSeen da presença do usuário no Redis
+   */
+  public static async refreshPresence(userId: string, fallbackUser?: UserPresence): Promise<void> {
+    try {
+      const raw = await redisClient.hget(this.USERS_KEY, userId);
+      if (raw) {
+        const user = JSON.parse(raw) as UserPresence;
+        user.lastSeen = Date.now();
+        await redisClient.hset(this.USERS_KEY, userId, JSON.stringify(user));
+      } else if (fallbackUser) {
+        await redisClient.hset(this.USERS_KEY, userId, JSON.stringify({ ...fallbackUser, lastSeen: Date.now() }));
+      }
+      await redisClient.expire(this.USERS_KEY, 86400);
+    } catch (err) {
+      console.error(`[PresenceService] Erro ao renovar presença para o usuário ${userId}:`, err);
+    }
+  }
+
+  /**
    * Remove a presença de um usuário que desconectou
    * Notifica estritamente os amigos aceitos via canais privados
    */

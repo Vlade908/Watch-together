@@ -172,6 +172,9 @@ export type SocialClientMessage =
       roomId: string;
     }
   | {
+      type: "ping";
+    }
+  | {
       type: "party_get_snapshot";
     };
 
@@ -225,6 +228,10 @@ export type SocialServerMessage =
       title: string;
       roomId: string;
       hostName: string;
+    }
+  | {
+      type: "pong";
+      timestamp: number;
     }
   | {
       type: "error";
