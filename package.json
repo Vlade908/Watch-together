@@ -13,6 +13,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "ci:local": "npm run db:generate && npm run typecheck && npm run server:build && npm run build --workspace=@watch-together/web",
+    "pipeline": "npm run pipeline --workspace=@watch-together/transcoder --",
     "pre-push": "npm run ci:local",
     "db:generate": "npm run db:generate --workspace=@watch-together/database",
     "db:migrate": "npm run db:migrate --workspace=@watch-together/database",
